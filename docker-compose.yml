@@ -1,0 +1,60 @@
+# One droplet: Postgres, the web app, the worker, Caddy (HTTPS) and a nightly DB backup.
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: smm
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: smm
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U smm"]
+      interval: 5s
+      retries: 20
+
+  web:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://smm:${POSTGRES_PASSWORD}@db:5432/smm
+      COVERS_DIR: /app/data/covers
+    volumes: [covers:/app/data/covers]
+    depends_on: { db: { condition: service_healthy } }
+
+  worker:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://smm:${POSTGRES_PASSWORD}@db:5432/smm
+      COVERS_DIR: /app/data/covers
+    volumes: [covers:/app/data/covers]
+    command: ["sh", "-c", "sleep 10 && npm run worker"]
+    depends_on: [web]
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    depends_on: [web]
+
+  backup:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+    volumes: [./backups:/backups, ./scripts/backup-loop.sh:/backup-loop.sh:ro]
+    entrypoint: ["sh", "/backup-loop.sh"]
+    depends_on: { db: { condition: service_healthy } }
+
+volumes:
+  pgdata:
+  covers:
+  caddy_data:
