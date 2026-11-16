@@ -24,6 +24,9 @@ const schema = z.object({
 
   UPLOAD_POST_API_KEY: z.string().optional(),
 
+  /// Shared secret for the Octo agent on the owner's computer (openssl rand -hex 32)
+  AGENT_TOKEN: z.string().optional(),
+
   SMTP_URL: z.string().optional(),
   MAIL_FROM: z.string().optional(),
   NOTIFY_EMAILS: z.string().optional(),

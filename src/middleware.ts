@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
 
-const PUBLIC = ["/login", "/api/health", "/api/public/"];
+// /api/agent/* authenticates with AGENT_TOKEN inside the route.
+const PUBLIC = ["/login", "/api/health", "/api/public/", "/api/agent/"];
 
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;

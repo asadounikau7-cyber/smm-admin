@@ -7,7 +7,7 @@ const STATUS: Record<string, string> = { ACTIVE: "Активен", NEEDS_RECONNE
 
 export default async function AccountsPage({ searchParams }: { searchParams: Promise<{ ok?: string; err?: string }> }) {
   const sp = await searchParams;
-  const accounts = await db.socialAccount.findMany({ orderBy: [{ platform: "asc" }, { handle: "asc" }], include: { _count: { select: { jobs: true } } } });
+  const accounts = await db.socialAccount.findMany({ orderBy: [{ platform: "asc" }, { handle: "asc" }], include: { octoProfile: true, _count: { select: { jobs: true } } } });
   const e = env();
   const ytReady = Boolean(e.GOOGLE_CLIENT_ID && e.GOOGLE_CLIENT_SECRET);
   const igReady = Boolean(e.INSTAGRAM_APP_ID && e.INSTAGRAM_APP_SECRET);
@@ -33,7 +33,7 @@ export default async function AccountsPage({ searchParams }: { searchParams: Pro
                   <td><PlatformTag platform={a.platform} /></td>
                   <td>
                     <div className="font-medium">@{a.handle}</div>
-                    <div className="text-xs muted">{a.displayName ?? a.externalId}</div>
+                    <div className="text-xs muted">{a.displayName ?? a.externalId}{a.octoProfile ? ` · Octo: ${a.octoProfile.title}` : ""}</div>
                   </td>
                   <td colSpan={2}>
                     <form action={updateAccountAction} className="flex gap-1">

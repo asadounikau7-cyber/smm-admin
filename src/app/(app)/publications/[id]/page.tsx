@@ -6,14 +6,14 @@ import { PageHeader, PlatformTag, StatusBadge, fmtDur, fmtSize } from "@/compone
 import { CopyButton } from "@/components/copy";
 import { FORMAT_LABEL } from "@/lib/validators";
 import { adapterFor } from "@/lib/adapters";
-import { cancelJobAction, generateCoverAction, manualStatusAction, rescheduleJobAction, retryJobAction } from "@/app/actions";
+import { agentCommandAction, cancelJobAction, generateCoverAction, manualStatusAction, rescheduleJobAction, retryJobAction } from "@/app/actions";
 
 export default async function JobPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const j = await db.publicationJob.findUnique({
     where: { id },
     include: {
-      account: true,
+      account: { include: { octoProfile: true } },
       rule: true,
       plan: true,
       attempts: { orderBy: { startedAt: "desc" }, take: 30 },
@@ -28,6 +28,9 @@ export default async function JobPage({ params }: { params: Promise<{ id: string
   const caps = adapterFor(j.account)?.capabilities;
   const active = !["CANCELLED", "PUBLISHED", "CANCEL_PENDING"].includes(j.status);
   const flags = [meta.aiDisclosure && "AI-контент", meta.paidPromotion && "Платное продвижение / реклама", meta.madeForKids && "Для детей"].filter(Boolean) as string[];
+  const hb = (await db.setting.findUnique({ where: { key: "agentHeartbeat" } }))?.value as { at: string; octo?: { apiAvailable?: boolean } } | undefined;
+  const agentApi = Boolean(hb && Date.now() - new Date(hb.at).getTime() < 60_000 && hb.octo?.apiAvailable);
+  const studioUrl = j.platform === "TIKTOK" ? "https://www.tiktok.com/tiktokstudio/upload" : j.platform === "INSTAGRAM" ? "https://www.instagram.com/" : "https://studio.youtube.com/";
   const tzLocal = DateTime.fromJSDate(j.scheduledAt, { zone: j.timezone }).toFormat("yyyy-LL-dd'T'HH:mm");
 
   return (
@@ -47,11 +50,30 @@ export default async function JobPage({ params }: { params: Promise<{ id: string
         {meta.operatorConfirmed && <div className="md:col-span-3 text-xs muted">Подтверждено оператором: {meta.operatorConfirmed.by}, {new Date(meta.operatorConfirmed.at).toLocaleString("ru-RU")}</div>}
       </div>
 
+      {j.account.octoProfile && (
+        <section className="card mb-4 flex flex-wrap items-center gap-3 p-4 text-sm">
+          <span className={`h-2 w-2 rounded-full ${j.account.octoProfile.running ? "bg-green-500" : "bg-gray-400"}`} />
+          <span>Профиль Octo: <b>{j.account.octoProfile.title}</b>{j.account.octoProfile.proxyNote ? <span className="muted"> · {j.account.octoProfile.proxyNote}</span> : null}</span>
+          {agentApi && j.account.octoProfile.octoUuid ? (
+            <form action={agentCommandAction} className="ml-auto">
+              <input type="hidden" name="type" value="START_PROFILE" />
+              <input type="hidden" name="profileId" value={j.account.octoProfile.id} />
+              <input type="hidden" name="url" value={studioUrl} />
+              <input type="hidden" name="back" value={`/publications/${j.id}`} />
+              <button className="btn btn-sm btn-primary">Открыть профиль</button>
+            </form>
+          ) : (
+            <span className="ml-auto text-xs muted">Откройте этот профиль в Octo вручную</span>
+          )}
+        </section>
+      )}
+
       {manualTikTok && (
         <section className="card mb-4 space-y-3 p-4">
           <h2 className="font-medium">Пакет для TikTok Studio</h2>
           <ol className="list-decimal space-y-1 pl-5 text-sm">
             <li>Скачайте видео{j.coverKey ? " и обложку" : ""}.</li>
+            {j.account.octoProfile && <li>Откройте профиль Octo <b>{j.account.octoProfile.title}</b>.</li>}
             <li>В TikTok Studio (веб) загрузите видео в аккаунт <b>@{j.account.handle}</b>, вставьте подпись, включите расписание и поставьте время <b>{j.localTime}</b> ({j.timezone}).</li>
             {flags.length > 0 && <li>Включите маркировку: <b>{flags.join(", ")}</b>.</li>}
             <li>Нажмите «Запланировано вручную» ниже. После выхода поста вставьте ссылку и отметьте «Опубликовано».</li>

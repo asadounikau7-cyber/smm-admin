@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { requireUser } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { env } from "@/lib/env";
 import { logoutAction } from "@/app/actions";
 import { Nav } from "@/components/nav";
 
@@ -28,7 +29,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       <main className="flex-1 min-w-0 px-4 py-5 md:px-8 md:py-7 max-w-[1400px]">
         {workerDown && (
           <div className="mb-4 rounded-lg bg-red-100 px-3 py-2 text-sm text-red-800 dark:bg-red-950 dark:text-red-300">
-            Worker не отвечает{hbAt ? ` с ${hbAt.toLocaleString("ru-RU")}` : ""}. Публикации и синхронизация не выполняются.
+            Worker не отвечает{hbAt ? ` с ${hbAt.toLocaleString("ru-RU", { timeZone: env().BASE_TIMEZONE })}` : ""}. Публикации и синхронизация не выполняются.
           </div>
         )}
         {children}

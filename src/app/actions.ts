@@ -419,3 +419,46 @@ export async function toggleSeriesActiveAction(f: FormData) {
   await db.series.update({ where: { id }, data: { active: !cur.active } });
   revalidatePath("/catalog");
 }
+
+// ---------- Octo Browser profiles ----------
+export async function saveOctoProfileAction(f: FormData) {
+  const u = await requireOwner();
+  const id = s(f, "id");
+  const data = { title: s(f, "title"), octoUuid: s(f, "octoUuid") || null, proxyNote: s(f, "proxyNote") || null, notes: s(f, "notes") || null };
+  if (!data.title) redirect("/profiles?err=" + encodeURIComponent("Укажите название профиля"));
+  const p = id ? await db.octoProfile.update({ where: { id }, data }) : await db.octoProfile.create({ data });
+  await audit(id ? "octo.update" : "octo.create", "OctoProfile", p.id, u.id);
+  revalidatePath("/profiles");
+}
+
+export async function deleteOctoProfileAction(f: FormData) {
+  const u = await requireOwner();
+  const id = s(f, "id");
+  await db.octoProfile.delete({ where: { id } });
+  await audit("octo.delete", "OctoProfile", id, u.id);
+  revalidatePath("/profiles");
+}
+
+export async function linkAccountProfileAction(f: FormData) {
+  const u = await requireOwner();
+  const accountId = s(f, "accountId");
+  await db.socialAccount.update({ where: { id: accountId }, data: { octoProfileId: s(f, "profileId") || null } });
+  await audit("account.octo", "SocialAccount", accountId, u.id, { profileId: s(f, "profileId") || null });
+  revalidatePath("/profiles");
+  revalidatePath("/accounts");
+}
+
+/** Queues a command for the agent on the owner's computer (works once the Octo plan has API access). */
+export async function agentCommandAction(f: FormData) {
+  const u = await requireUser();
+  const type = s(f, "type") as "START_PROFILE" | "STOP_PROFILE" | "LIST_PROFILES";
+  const profileId = s(f, "profileId") || null;
+  if (profileId && type !== "LIST_PROFILES") {
+    const p = await db.octoProfile.findUniqueOrThrow({ where: { id: profileId } });
+    if (!p.octoUuid) redirect("/profiles?err=" + encodeURIComponent(`У профиля «${p.title}» не указан UUID из Octo`));
+  }
+  await db.agentCommand.create({ data: { type, profileId, url: s(f, "url") || null, createdById: u.id } });
+  revalidatePath("/profiles");
+  const back = s(f, "back");
+  if (back.startsWith("/")) redirect(back);
+}

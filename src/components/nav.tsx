@@ -9,6 +9,7 @@ const ITEMS = [
   { href: "/catalog", label: "Каталог" },
   { href: "/rules", label: "Правила" },
   { href: "/accounts", label: "Аккаунты" },
+  { href: "/profiles", label: "Профили Octo" },
   { href: "/settings", label: "Настройки" },
 ];
 

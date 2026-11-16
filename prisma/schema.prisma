@@ -164,6 +164,9 @@ model SocialAccount {
   tiktokMode     TikTokMode?
   /// AES-GCM encrypted JSON with tokens
   credentials    String?
+  /// Octo Browser profile the account is logged in under (manual posting / checks happen there)
+  octoProfileId  String?
+  octoProfile    OctoProfile?  @relation(fields: [octoProfileId], references: [id], onDelete: SetNull)
   tokenExpiresAt DateTime?
   lastCheckedAt  DateTime?
   lastError      String?
@@ -309,4 +312,53 @@ model Notification {
 model Setting {
   key   String @id
   value Json
+}
+
+/// An Octo Browser profile on the owner's computer. Variant A: Octo runs there, an agent relays commands.
+model OctoProfile {
+  id        String          @id @default(cuid())
+  title     String
+  /// Profile UUID in Octo (needed only for API control, Base plan and above)
+  octoUuid  String?         @unique
+  proxyNote String?
+  notes     String?
+  /// Last state reported by the agent
+  running   Boolean         @default(false)
+  lastSeenAt DateTime?
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+  accounts  SocialAccount[]
+  commands  AgentCommand[]
+}
+
+enum AgentCommandType {
+  START_PROFILE
+  STOP_PROFILE
+  LIST_PROFILES
+}
+
+enum AgentCommandStatus {
+  PENDING
+  TAKEN
+  DONE
+  FAILED
+}
+
+/// Commands the admin queues for the agent on the owner's computer; the agent polls over HTTPS.
+model AgentCommand {
+  id         String             @id @default(cuid())
+  type       AgentCommandType
+  profileId  String?
+  profile    OctoProfile?       @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  /// Page to open after the profile starts
+  url        String?
+  status     AgentCommandStatus @default(PENDING)
+  result     Json?
+  error      String?
+  createdById String?
+  takenAt    DateTime?
+  doneAt     DateTime?
+  createdAt  DateTime           @default(now())
+
+  @@index([status, createdAt])
 }
