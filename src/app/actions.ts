@@ -389,11 +389,22 @@ export async function saveSettingsAction(f: FormData) {
   revalidatePath("/settings");
 }
 
+export async function changeMyPasswordAction(f: FormData) {
+  const u = await requireUser();
+  const me = await db.user.findUniqueOrThrow({ where: { id: u.id } });
+  if (!(await bcrypt.compare(s(f, "current"), me.passwordHash))) redirect("/settings?err=" + encodeURIComponent("Текущий пароль неверный"));
+  const password = s(f, "password");
+  if (password.length < 4) redirect("/settings?err=" + encodeURIComponent("Новый пароль минимум 4 символа"));
+  await db.user.update({ where: { id: u.id }, data: { passwordHash: await bcrypt.hash(password, 12) } });
+  await audit("user.password", "User", u.id, u.id);
+  redirect("/settings?ok=" + encodeURIComponent("Пароль изменён"));
+}
+
 export async function createUserAction(f: FormData) {
   const u = await requireOwner();
   const email = s(f, "email").toLowerCase();
   const password = s(f, "password");
-  if (password.length < 10) redirect("/settings?err=" + encodeURIComponent("Пароль минимум 10 символов"));
+  if (password.length < 4) redirect("/settings?err=" + encodeURIComponent("Пароль минимум 4 символа"));
   const created = await db.user.upsert({
     where: { email },
     update: { passwordHash: await bcrypt.hash(password, 12), role: (s(f, "role") || "OPERATOR") as Role },

@@ -2,7 +2,7 @@ import { db } from "@/lib/db";
 import { env, b2Configured } from "@/lib/env";
 import { requireUser } from "@/lib/auth";
 import { Flash, PageHeader } from "@/components/ui";
-import { createUserAction, deleteUserAction, saveSettingsAction } from "@/app/actions";
+import { changeMyPasswordAction, createUserAction, deleteUserAction, saveSettingsAction } from "@/app/actions";
 
 export default async function SettingsPage({ searchParams }: { searchParams: Promise<{ ok?: string; err?: string }> }) {
   const sp = await searchParams;
@@ -17,6 +17,13 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
       <PageHeader title="Настройки" />
       <Flash msg={sp.ok} />
       <Flash msg={sp.err} kind="err" />
+
+      <form action={changeMyPasswordAction} className="card grid gap-3 p-4 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
+        <div className="sm:col-span-3 font-medium">Мой пароль ({me.email})</div>
+        <div><label className="label">Текущий пароль</label><input name="current" type="password" required className="input" autoComplete="current-password" /></div>
+        <div><label className="label">Новый пароль (4+)</label><input name="password" type="password" required minLength={4} className="input" autoComplete="new-password" /></div>
+        <button className="btn btn-primary">Сменить</button>
+      </form>
 
       <form action={saveSettingsAction} className="card space-y-3 p-4">
         <h2 className="font-medium">Публикация</h2>
@@ -53,7 +60,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
         {me.role === "OWNER" && (
           <form action={createUserAction} className="grid gap-2 md:grid-cols-4 md:items-end">
             <div><label className="label">Email</label><input name="email" type="email" required className="input" /></div>
-            <div><label className="label">Пароль (10+)</label><input name="password" type="password" required minLength={10} className="input" /></div>
+            <div><label className="label">Пароль (4+)</label><input name="password" type="password" required minLength={4} className="input" /></div>
             <div>
               <label className="label">Роль</label>
               <select name="role" className="input"><option value="OPERATOR">Оператор</option><option value="OWNER">Владелец</option></select>
