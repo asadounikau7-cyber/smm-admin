@@ -5,6 +5,7 @@ import { adapterFor } from "@/lib/adapters";
 import { igRefresh } from "@/lib/adapters/instagram";
 import { claim, runCancel, runJob } from "@/lib/runner";
 import { flushEmails, notify } from "@/lib/notify";
+import { agentRenderOnline, claimRender, getRenderMode, renderOnServer } from "@/lib/renderJobs";
 
 const TICK_MS = 15_000;
 let lastSync = 0;
@@ -83,12 +84,28 @@ async function followUps() {
   for (const j of cancels) if (await claim(j.id, ["CANCEL_PENDING"])) await runCancel(j.id);
 }
 
+let rendering: Promise<void> | null = null;
+
+/** Renders one waiting version in the background when the owner's computer can't (or isn't set to). */
+async function maybeRender() {
+  if (rendering) return;
+  const mode = await getRenderMode();
+  if (mode === "agent" || (mode === "auto" && (await agentRenderOnline()))) return;
+  const id = await claimRender("server");
+  if (!id) return;
+  console.log(`[render] ${id}`);
+  rendering = renderOnServer(id)
+    .catch((e) => console.error("[render]", e))
+    .finally(() => (rendering = null));
+}
+
 async function tick() {
   await heartbeat();
   await maybeSync();
   await refreshTokens();
   await dispatchDue();
   await followUps();
+  await maybeRender();
   await flushEmails().catch((e) => console.error("[mail]", e));
 }
 

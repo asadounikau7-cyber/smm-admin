@@ -16,7 +16,7 @@ export async function readCover(coverKey: string): Promise<Buffer> {
 
 export async function makeCover(asset: { objectKey: string; publicUrl: string | null }, version: { versionKey: string }, title: string, vertical: boolean, atSec = 1) {
   await mkdir(DIR, { recursive: true });
-  const url = await mediaUrl(asset, version, 600);
+  const url = await mediaUrl(asset, version, 600, { internal: true });
   const buf = await generateCover(url, title, atSec, vertical);
   const name = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}.jpg`;
   await writeFile(path.join(DIR, name), buf);

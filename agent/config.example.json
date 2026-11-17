@@ -2,5 +2,7 @@
   "adminUrl": "https://admin.example.com",
   "agentToken": "значение AGENT_TOKEN из .env на сервере",
   "octoApiToken": "",
-  "octoDir": ""
+  "octoDir": "",
+  "render": true,
+  "ffmpegPath": ""
 }

@@ -23,7 +23,7 @@ export default async function CatalogPage({ searchParams }: { searchParams: SP }
     ? await db.series.findUnique({
         where: { id: sp.series },
         include: {
-          episodes: { orderBy: [{ season: "asc" }, { number: "asc" }], include: { assets: { include: { versions: { where: { isCurrent: true } } } } } },
+          episodes: { orderBy: [{ season: "asc" }, { number: "asc" }], include: { assets: { where: { renderOfId: null }, include: { versions: { where: { isCurrent: true } } } } } },
           assets: { where: { episodeId: null }, include: { versions: { where: { isCurrent: true } } } },
         },
       })

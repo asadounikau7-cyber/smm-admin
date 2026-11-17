@@ -104,7 +104,7 @@ export async function syncCatalog(): Promise<SyncResult> {
   // Mark removed objects.
   const live = await db.asset.findMany({ where: { deletedAt: null }, select: { id: true, objectKey: true } });
   for (const a of live) {
-    if (!seenKeys.has(a.objectKey) && a.objectKey.startsWith(env().B2_PREFIX)) {
+    if (!seenKeys.has(a.objectKey) && !a.objectKey.startsWith("local:") && a.objectKey.startsWith(env().B2_PREFIX)) {
       await db.asset.update({ where: { id: a.id }, data: { deletedAt: new Date() } });
       res.deleted++;
     }
@@ -128,7 +128,7 @@ export async function probePending(limit = 20) {
   });
   for (const v of pending) {
     try {
-      const url = await mediaUrl(v.asset, v, 600);
+      const url = await mediaUrl(v.asset, v, 600, { internal: true });
       const r = await probe(url);
       await db.assetVersion.update({ where: { id: v.id }, data: { ...r, probedAt: new Date(), probeError: null } });
     } catch (e) {

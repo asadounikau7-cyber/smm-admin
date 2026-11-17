@@ -104,6 +104,7 @@ export default async function RuleForm({ params, searchParams }: { params: Promi
         </div>
         <div className="flex flex-wrap gap-4 text-sm">
           <label className="flex items-center gap-2"><input type="checkbox" name="strictOrder" defaultChecked={rule?.strictOrder ?? true} /> Строгий порядок серий</label>
+          <label className="flex items-center gap-2"><input type="checkbox" name="requireVariant" defaultChecked={rule?.requireVariant ?? false} /> Только своя версия аккаунта (без версии — не публиковать оригинал)</label>
           <label className="flex items-center gap-2"><input type="checkbox" name="madeForKids" defaultChecked={rule?.madeForKids ?? false} /> Для детей</label>
           <label className="flex items-center gap-2"><input type="checkbox" name="aiDisclosure" defaultChecked={rule?.aiDisclosure ?? false} /> Содержит AI / синтетику</label>
           <label className="flex items-center gap-2"><input type="checkbox" name="paidPromotion" defaultChecked={rule?.paidPromotion ?? false} /> Платное продвижение</label>

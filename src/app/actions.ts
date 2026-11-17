@@ -198,6 +198,7 @@ export async function saveRuleAction(f: FormData) {
     cta: s(f, "cta") || null,
     hashtags: s(f, "hashtags") || null,
     strictOrder: b(f, "strictOrder"),
+    requireVariant: b(f, "requireVariant"),
     madeForKids: b(f, "madeForKids"),
     aiDisclosure: b(f, "aiDisclosure"),
     paidPromotion: b(f, "paidPromotion"),

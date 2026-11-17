@@ -11,9 +11,9 @@ export type ProbeResult = {
   audioCodec: string | null;
 };
 
-function run(cmd: string, args: string[], timeoutMs = 120_000): Promise<{ code: number; stdout: string; stderr: string }> {
+export function run(cmd: string, args: string[], timeoutMs = 120_000, cwd?: string): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
-    const p = spawn(cmd, args);
+    const p = spawn(cmd, args, { cwd });
     let stdout = "";
     let stderr = "";
     const t = setTimeout(() => p.kill("SIGKILL"), timeoutMs);

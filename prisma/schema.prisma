@@ -94,6 +94,7 @@ model Series {
   episodes  Episode[]
   assets    Asset[]
   rules     ReleaseRule[]
+  variants  VideoVariant[]
 }
 
 model Episode {
@@ -104,6 +105,7 @@ model Episode {
   number   Int
   title    String?
   assets   Asset[]
+  variants VideoVariant[]
 
   @@unique([seriesId, season, number])
 }
@@ -124,9 +126,13 @@ model Asset {
   needsMapping  Boolean        @default(true)
   rightsConfirmed Boolean      @default(false)
   deletedAt     DateTime?
+  /// Set when this asset is the rendered file of an edited version (not a source from B2)
+  renderOfId    String?        @unique
+  renderOf      VideoVariant?  @relation("RenderOutput", fields: [renderOfId], references: [id], onDelete: Cascade)
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
   versions      AssetVersion[]
+  variantsFrom  VideoVariant[] @relation("VariantSource")
 }
 
 model AssetVersion {
@@ -148,6 +154,7 @@ model AssetVersion {
   probeError  String?
   createdAt   DateTime  @default(now())
   jobs        PublicationJob[]
+  variantsFrom VideoVariant[] @relation("VariantSourceVersion")
 
   @@unique([assetId, versionKey])
 }
@@ -167,6 +174,7 @@ model SocialAccount {
   /// Octo Browser profile the account is logged in under (manual posting / checks happen there)
   octoProfileId  String?
   octoProfile    OctoProfile?  @relation(fields: [octoProfileId], references: [id], onDelete: SetNull)
+  variants       VideoVariant[]
   tokenExpiresAt DateTime?
   lastCheckedAt  DateTime?
   lastError      String?
@@ -199,6 +207,8 @@ model ReleaseRule {
   cta             String?
   hashtags        String?
   strictOrder     Boolean     @default(true)
+  /// Publish only the account's own edited version of each episode (block when there is none)
+  requireVariant  Boolean     @default(false)
   madeForKids     Boolean     @default(false)
   aiDisclosure    Boolean     @default(false)
   paidPromotion   Boolean     @default(false)
@@ -360,5 +370,62 @@ model AgentCommand {
   doneAt     DateTime?
   createdAt  DateTime           @default(now())
 
+  @@index([status, createdAt])
+}
+
+/// Editing template: a base recipe plus the ranges that make each generated version different.
+model EditTemplate {
+  id          String         @id @default(cuid())
+  name        String
+  notes       String?
+  recipe      Json
+  variation   Json
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  variants    VideoVariant[]
+}
+
+enum VariantStatus {
+  PENDING
+  RENDERING
+  READY
+  FAILED
+}
+
+/// One edited version of one episode. Rendered from the untouched source by its recipe; given to at most one account.
+model VideoVariant {
+  id              String        @id @default(cuid())
+  /// Human code, e.g. 639846-S01E03-EN-V017
+  code            String        @unique
+  number          Int
+  language        String
+  seriesId        String
+  series          Series        @relation(fields: [seriesId], references: [id], onDelete: Cascade)
+  episodeId       String
+  episode         Episode       @relation(fields: [episodeId], references: [id], onDelete: Cascade)
+  sourceAssetId   String
+  sourceAsset     Asset         @relation("VariantSource", fields: [sourceAssetId], references: [id], onDelete: Cascade)
+  sourceVersionId String
+  sourceVersion   AssetVersion  @relation("VariantSourceVersion", fields: [sourceVersionId], references: [id], onDelete: Cascade)
+  templateId      String?
+  template        EditTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  recipe          Json
+  /// Hash of the normalized recipe: two versions of one episode can't be identical
+  signature       String
+  accountId       String?
+  account         SocialAccount? @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  status          VariantStatus @default(PENDING)
+  renderer        String?
+  leaseUntil      DateTime?
+  attempts        Int           @default(0)
+  error           String?
+  renderedAt      DateTime?
+  notes           String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  output          Asset?        @relation("RenderOutput")
+
+  @@unique([episodeId, accountId])
+  @@unique([episodeId, signature])
   @@index([status, createdAt])
 }

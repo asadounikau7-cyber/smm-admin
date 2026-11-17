@@ -60,9 +60,16 @@ export async function buildWeek(weekStart: Date, userId: string | null) {
   })) as RuleFull[];
 
   const assets = (await db.asset.findMany({
-    where: { deletedAt: null, needsMapping: false },
+    where: { deletedAt: null, needsMapping: false, renderOfId: null },
     include: { versions: { where: { isCurrent: true } } },
   })) as AssetWithVersion[];
+
+  // Edited versions given to accounts: an account publishes its own version of the episode when it has one.
+  const variants = await db.videoVariant.findMany({
+    where: { accountId: { in: [...new Set(rules.map((r) => r.accountId))] } },
+    include: { output: { include: { versions: { where: { isCurrent: true } } } } },
+  });
+  const variantFor = new Map(variants.map((v) => [`${v.episodeId}|${v.accountId}`, v]));
 
   const existing = await db.publicationJob.findMany({ where: { planId: plan.id } });
   const approvedHere = existing.filter((j) => !isDraft(j.status));
@@ -170,7 +177,16 @@ export async function buildWeek(weekStart: Date, userId: string | null) {
       if (prev && !isDraft(prev.status)) continue;
 
       const series = c.rule.series;
-      const ver = currentVersion(c.asset);
+      let ver = currentVersion(c.asset);
+      const reasons = [...c.extraReasons];
+      const variant = c.episode && c.rule.assetKind !== "TEASER" ? variantFor.get(`${c.episode.id}|${c.rule.accountId}`) : undefined;
+      if (variant) {
+        const out = variant.output?.versions[0];
+        if (variant.status === "READY" && out) ver = out;
+        else reasons.push(`Версия ${variant.code} ещё не собрана (${variant.status === "FAILED" ? "ошибка сборки" : "в очереди"})`);
+      } else if (c.rule.requireVariant && c.episode) {
+        reasons.push(`Нет своей версии S${c.episode.season}E${c.episode.number} для @${c.rule.account.handle}`);
+      }
       const vars = { title: c.episode?.title ?? series.title, series: series.title, season: c.episode?.season, episode: c.episode?.number, cta: c.rule.cta, hashtags: c.rule.hashtags ?? series.hashtags };
       const caption = renderCaption(c.rule.captionTemplate, vars);
       const title =
@@ -203,7 +219,9 @@ export async function buildWeek(weekStart: Date, userId: string | null) {
           madeForKids: c.rule.madeForKids,
           aiDisclosure: c.rule.aiDisclosure,
           paidPromotion: c.rule.paidPromotion,
-          extraReasons: c.extraReasons,
+          extraReasons: reasons,
+          variantId: variant?.id ?? null,
+          variantCode: variant?.code ?? null,
         } satisfies Prisma.InputJsonValue,
       };
 

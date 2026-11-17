@@ -8,13 +8,19 @@
  *
  * On the Starter plan Octo has no API: the agent still reports that Octo is running,
  * and profile commands fail with a clear message. On Base+ everything works.
+ *
+ * It also renders edited video versions with ffmpeg (much faster than the 1-vCPU server):
+ * the admin hands out one task at a time, the agent downloads the source, runs ffmpeg
+ * with the arguments it got and uploads the MP4 back. Turn off with "render": false.
  */
 import { readFileSync, existsSync } from "node:fs";
-import { homedir, hostname } from "node:os";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { homedir, hostname, tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const VERSION = "0.1.0";
+const VERSION = "0.2.0";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const cfgFile = path.join(here, "config.json");
 const cfg = existsSync(cfgFile) ? JSON.parse(readFileSync(cfgFile, "utf8")) : {};
@@ -23,6 +29,8 @@ const AGENT_TOKEN = process.env.AGENT_TOKEN ?? cfg.agentToken ?? "";
 const OCTO_API_TOKEN = process.env.OCTO_API_TOKEN ?? cfg.octoApiToken ?? "";
 const OCTO_DIR = process.env.OCTO_DIR ?? cfg.octoDir ?? path.join(homedir(), ".Octo Browser");
 const POLL_MS = 5000;
+const FFMPEG = process.env.FFMPEG_PATH ?? cfg.ffmpegPath ?? "ffmpeg";
+const RENDER_WANTED = (process.env.AGENT_RENDER ?? cfg.render ?? true) !== false && process.env.AGENT_RENDER !== "0";
 
 if (!ADMIN_URL || !AGENT_TOKEN) {
   console.error("Укажите adminUrl и agentToken в agent/config.json (см. config.example.json)");
@@ -130,9 +138,73 @@ async function admin(p, body) {
   return res.json();
 }
 
+// ---------- rendering ----------
+let canRender = false;
+let busy = false;
+
+function exec(cmd, args, cwd) {
+  return new Promise((resolve) => {
+    let err = "";
+    const p = spawn(cmd, args, { cwd, windowsHide: true });
+    p.stderr?.on("data", (d) => { err = (err + d).slice(-4000); });
+    p.on("error", (e) => resolve({ code: 1, err: e.message }));
+    p.on("close", (code) => resolve({ code: code ?? 1, err }));
+  });
+}
+
+async function checkFfmpeg() {
+  if (!RENDER_WANTED) return false;
+  const r = await exec(FFMPEG, ["-hide_banner", "-version"]);
+  if (r.code !== 0) console.warn(`ffmpeg не найден (${FFMPEG}): версии будет собирать сервер. Установите ffmpeg или укажите ffmpegPath в config.json`);
+  return r.code === 0;
+}
+
+async function download(url, file) {
+  const headers = url.startsWith(ADMIN_URL) ? { authorization: `Bearer ${AGENT_TOKEN}` } : {};
+  const res = await fetch(url, { headers, signal: AbortSignal.timeout(15 * 60_000) });
+  if (!res.ok) throw new Error(`скачивание ${path.basename(file)}: HTTP ${res.status}`);
+  // Episodes are a few MB: buffering is simpler and avoids stream back-pressure quirks with some servers.
+  await writeFile(file, Buffer.from(await res.arrayBuffer()));
+}
+
+async function render(task) {
+  busy = true;
+  const started = Date.now();
+  const dir = await mkdtemp(path.join(tmpdir(), "smm-render-"));
+  console.log(new Date().toLocaleTimeString(), "сборка", task.code);
+  try {
+    for (const i of task.inputs) await download(i.url, path.join(dir, path.basename(i.name)));
+    for (const [name, content] of Object.entries(task.files ?? {})) await writeFile(path.join(dir, path.basename(name)), content, "utf8");
+    const r = await exec(FFMPEG, task.args, dir);
+    if (r.code !== 0) throw new Error(`ffmpeg: ${r.err.trim().split("\n").slice(-3).join(" ").slice(0, 400)}`);
+    const body = await readFile(path.join(dir, path.basename(task.output)));
+    const res = await fetch(task.uploadUrl, {
+      method: "PUT",
+      headers: { authorization: `Bearer ${AGENT_TOKEN}`, "content-type": "video/mp4" },
+      body,
+      signal: AbortSignal.timeout(15 * 60_000),
+    });
+    if (!res.ok) throw new Error(`загрузка: HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
+    console.log(`  готово за ${Math.round((Date.now() - started) / 1000)} с, ${(body.length / 1048576).toFixed(1)} МБ`);
+  } catch (e) {
+    console.warn("  ошибка сборки:", e.message);
+    await fetch(task.uploadUrl, {
+      method: "POST",
+      headers: { authorization: `Bearer ${AGENT_TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify({ error: e.message }),
+    }).catch(() => {});
+  } finally {
+    busy = false;
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
 async function tick() {
   const { st, running } = await octoStatus();
-  const { commands } = await admin("/api/agent/poll", { hostname: hostname(), version: VERSION, octo: st, running });
+  const { commands, render: task } = await admin("/api/agent/poll", {
+    hostname: hostname(), version: VERSION, octo: st, running, render: { enabled: canRender, busy },
+  });
+  if (task) render(task); // runs in the background; polling (and Octo commands) continue
   for (const cmd of commands) {
     console.log(new Date().toLocaleTimeString(), cmd.type, cmd.title ?? "");
     try {
@@ -148,6 +220,8 @@ async function tick() {
 }
 
 console.log(`Octo agent ${VERSION} → ${ADMIN_URL}`);
+canRender = await checkFfmpeg();
+if (canRender) console.log("Сборка версий видео: включена (ffmpeg найден)");
 let warned = false;
 for (;;) {
   try {

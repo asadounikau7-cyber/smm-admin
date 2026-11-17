@@ -7,6 +7,8 @@ const ITEMS = [
   { href: "/plan", label: "Неделя" },
   { href: "/publications", label: "Публикации" },
   { href: "/catalog", label: "Каталог" },
+  { href: "/variants", label: "Версии" },
+  { href: "/templates", label: "Шаблоны" },
   { href: "/rules", label: "Правила" },
   { href: "/accounts", label: "Аккаунты" },
   { href: "/profiles", label: "Профили Octo" },
