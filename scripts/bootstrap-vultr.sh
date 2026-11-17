@@ -19,7 +19,7 @@ exec > >(tee -a /var/log/smm-bootstrap.log) 2>&1
 set -euo pipefail
 echo "== bootstrap started $(date -u)"
 
-if [ -z "$GITHUB_TOKEN" ] || [ -z "$OWNER_EMAIL" ] || [ ${#OWNER_PASSWORD} -lt 10 ]; then
+if [ -z "$GITHUB_TOKEN" ] || [ -z "$OWNER_EMAIL" ] || [ ${#OWNER_PASSWORD} -lt 10 ] || [[ "$GITHUB_TOKEN$OWNER_PASSWORD" == *ВСТАВЬТЕ* || "$GITHUB_TOKEN$OWNER_PASSWORD" == *ПРИДУМАЙТЕ* ]]; then
   echo "Fill in GITHUB_TOKEN, OWNER_EMAIL and OWNER_PASSWORD (10+ chars) at the top of the script"; exit 1
 fi
 
