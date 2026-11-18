@@ -3,6 +3,8 @@ import { env, b2Configured, fileEnv } from "@/lib/env";
 import { storedIntegrationKeys } from "@/lib/integrationKeys";
 import { requireUser } from "@/lib/auth";
 import { Flash, PageHeader } from "@/components/ui";
+import { getYtTestSettings } from "@/lib/seriesTest";
+import { saveYtTestSettingsAction } from "@/app/testActions";
 import { changeMyPasswordAction, saveIntegrationKeysAction, createUserAction, deleteUserAction, saveSettingsAction } from "@/app/actions";
 
 export default async function SettingsPage({ searchParams }: { searchParams: Promise<{ ok?: string; err?: string }> }) {
@@ -12,6 +14,9 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
   const get = (k: string) => settings.find((x) => x.key === k)?.value;
   const e = env();
   const stored = await storedIntegrationKeys();
+  const ytTest = await getYtTestSettings();
+  const ytAccounts = await db.socialAccount.findMany({ where: { platform: "YOUTUBE" }, include: { octoProfile: { select: { title: true } } }, orderBy: { handle: "asc" } });
+  const ytLabel = (a: (typeof ytAccounts)[number]) => `@${a.handle}${a.octoProfile ? ` · Octo «${a.octoProfile.title}»` : ""}`;
   const fe = fileEnv();
   const KEYS = [
     { k: "GOOGLE_CLIENT_ID", label: "Google Client ID", group: "YouTube" },
@@ -42,6 +47,39 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
         <div className="max-w-xs"><label className="label">Лимит загрузок YouTube в сутки (квота API)</label><input name="youtubeDailyUploads" type="number" defaultValue={Number(get("youtubeDailyUploads") ?? 6)} className="input" /></div>
         <p className="text-xs muted">Окно догоняющей публикации: {e.CATCHUP_WINDOW_MIN} мин (CATCHUP_WINDOW_MIN). Базовый часовой пояс: {e.BASE_TIMEZONE}.</p>
         <button className="btn btn-primary" disabled={me.role !== "OWNER"}>Сохранить</button>
+      </form>
+
+      <form action={saveYtTestSettingsAction} className="card grid gap-3 p-4 md:grid-cols-2">
+        <h2 className="md:col-span-2 font-medium">YouTube-тест сериалов</h2>
+        <p className="md:col-span-2 text-xs muted">
+          Каталог → сериал → «Отправить на тест»: серия уходит на тестовый канал. Если YouTube не отклонил и не заблокировал ролик за время наблюдения, сериал становится «в работе», а серия 1 сразу уходит на основной канал.
+        </p>
+        <div>
+          <label className="label">Тестовый канал по умолчанию</label>
+          <select name="testAccountId" defaultValue={ytTest.testAccountId ?? ""} className="input">
+            <option value="">—</option>
+            {ytAccounts.map((a) => <option key={a.id} value={a.id}>{ytLabel(a)}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="label">Основной канал по умолчанию</label>
+          <select name="launchAccountId" defaultValue={ytTest.launchAccountId ?? ""} className="input">
+            <option value="">—</option>
+            {ytAccounts.map((a) => <option key={a.id} value={a.id}>{ytLabel(a)}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="label">Доступ к тестовому ролику</label>
+          <select name="visibility" defaultValue={ytTest.visibility} className="input">
+            <option value="UNLISTED">По ссылке (рекомендуется)</option>
+            <option value="PUBLIC">Открытый</option>
+          </select>
+        </div>
+        <div>
+          <label className="label">Наблюдать после загрузки, мин</label>
+          <input name="waitMin" type="number" min={0} defaultValue={ytTest.waitMin} className="input" />
+        </div>
+        <div><button className="btn btn-primary" disabled={me.role !== "OWNER"}>Сохранить</button></div>
       </form>
 
       {me.role === "OWNER" && (

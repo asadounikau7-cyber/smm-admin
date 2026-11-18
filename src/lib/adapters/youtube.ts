@@ -279,3 +279,41 @@ export async function googleExchange(code: string, verifier: string) {
   const items = (ch.items ?? []) as { id: string; snippet: { title: string; customUrl?: string } }[];
   return { creds, channels: items };
 }
+
+const REJECTION_RU: Record<string, string> = {
+  claim: "заявка Content ID",
+  copyright: "нарушение авторских прав",
+  duplicate: "дубликат уже загруженного видео",
+  inappropriate: "недопустимый контент",
+  legal: "юридическая жалоба",
+  length: "слишком длинное",
+  termsOfUse: "нарушение правил YouTube",
+  trademark: "товарный знак",
+  uploaderAccountClosed: "канал закрыт",
+  uploaderAccountSuspended: "канал заблокирован",
+};
+
+export type VideoHealth =
+  | { state: "ok"; note: string }
+  | { state: "pending"; note: string }
+  | { state: "bad"; note: string };
+
+/**
+ * What YouTube says about an uploaded video right now: removed, rejected, blocked by Content ID in some countries,
+ * still processing, or clean. Claims that only take the money (no block) are not visible through the API.
+ */
+export async function ytVideoHealth(account: SocialAccount, videoId: string, expectedPrivacy: string): Promise<VideoHealth> {
+  const { body } = await api(account, `videos?part=status,contentDetails,processingDetails&id=${videoId}`);
+  const v = body.items?.[0];
+  if (!v) return { state: "bad", note: "Ролик удалён с YouTube или недоступен" };
+  const st = v.status ?? {};
+  if (st.uploadStatus === "rejected") return { state: "bad", note: `YouTube отклонил: ${REJECTION_RU[st.rejectionReason] ?? st.rejectionReason ?? "без причины"}` };
+  if (st.uploadStatus === "failed") return { state: "bad", note: `YouTube не смог обработать файл: ${st.failureReason ?? ""}`.trim() };
+  if (st.uploadStatus === "deleted") return { state: "bad", note: "Ролик удалён" };
+  const rr = v.contentDetails?.regionRestriction;
+  if (rr?.blocked?.length) return { state: "bad", note: `Заблокирован в ${rr.blocked.length} странах (Content ID): ${rr.blocked.slice(0, 8).join(", ")}${rr.blocked.length > 8 ? "…" : ""}` };
+  if (rr?.allowed) return { state: "bad", note: `Доступен только в ${rr.allowed.length} странах (Content ID)` };
+  if (st.uploadStatus !== "processed") return { state: "pending", note: "YouTube ещё обрабатывает ролик" };
+  if (st.privacyStatus !== expectedPrivacy) return { state: "bad", note: `YouTube поменял доступ на «${st.privacyStatus}»` };
+  return { state: "ok", note: "Ролик доступен, блокировок нет" };
+}

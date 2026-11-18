@@ -64,6 +64,13 @@ enum JobStatus {
   UNKNOWN
 }
 
+enum SeriesStage {
+  NEW
+  TESTING
+  IN_WORK
+  TEST_FAILED
+}
+
 enum AccountStatus {
   ACTIVE
   NEEDS_RECONNECT
@@ -93,6 +100,15 @@ model Series {
   /// Banned / Inactive: shown in red everywhere, excluded from plans and new versions
   bannedAt  DateTime?
   banReason String?
+  /// YouTube test: upload a version to the test channel, then on success the whole series goes "in work"
+  stage         SeriesStage @default(NEW)
+  testJobId     String?
+  testNote      String?
+  /// First time the test upload was seen live on YouTube; the check window counts from here
+  testLiveAt    DateTime?
+  testCheckedAt DateTime?
+  inWorkAt      DateTime?
+  launchJobId   String?
   createdAt DateTime  @default(now())
   episodes  Episode[]
   assets    Asset[]

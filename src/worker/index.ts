@@ -6,6 +6,7 @@ import { igRefresh } from "@/lib/adapters/instagram";
 import { claim, runCancel, runJob } from "@/lib/runner";
 import { flushEmails, notify } from "@/lib/notify";
 import { loadIntegrationKeys } from "@/lib/integrationKeys";
+import { checkSeriesTests } from "@/lib/seriesTest";
 import { agentRenderOnline, claimRender, getRenderMode, renderOnServer } from "@/lib/renderJobs";
 
 const TICK_MS = 15_000;
@@ -107,6 +108,7 @@ async function tick() {
   await refreshTokens();
   await dispatchDue();
   await followUps();
+  await checkSeriesTests();
   await maybeRender();
   await flushEmails().catch((e) => console.error("[mail]", e));
 }

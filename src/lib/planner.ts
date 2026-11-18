@@ -26,6 +26,11 @@ type Candidate = {
   extraReasons: string[];
 };
 
+/** Episode 1 sent to the main channel after a successful YouTube test counts as published there. */
+function isLaunchOn(j: { ruleId: string | null; accountId: string; meta: Prisma.JsonValue }, accountId: string) {
+  return j.ruleId == null && j.accountId === accountId && (j.meta as { purpose?: string } | null)?.purpose === "launch";
+}
+
 export function idemKey(planId: string, accountId: string, instanceKey: string) {
   return createHash("sha1").update(`${planId}|${accountId}|${instanceKey}`).digest("hex");
 }
@@ -75,7 +80,7 @@ export async function buildWeek(weekStart: Date, userId: string | null) {
   const approvedHere = existing.filter((j) => !isDraft(j.status));
   const usedElsewhere = await db.publicationJob.findMany({
     where: { planId: { not: plan.id }, status: { not: "CANCELLED" } },
-    select: { ruleId: true, instanceKey: true, meta: true },
+    select: { ruleId: true, accountId: true, instanceKey: true, meta: true },
   });
 
   const candidates: Candidate[] = [];
@@ -115,7 +120,10 @@ export async function buildWeek(weekStart: Date, userId: string | null) {
 
     // Episodic: next episodes in order.
     const done = new Set(
-      [...usedElsewhere, ...approvedHere].filter((j) => j.ruleId === rule.id).map((j) => j.instanceKey.split(":ep:")[1]).filter(Boolean),
+      [...usedElsewhere, ...approvedHere]
+        .filter((j) => j.ruleId === rule.id || isLaunchOn(j, rule.accountId))
+        .map((j) => j.instanceKey.split(":ep:")[1])
+        .filter(Boolean),
     );
     const queue = rule.series.episodes.filter((e) => !done.has(e.id));
     let stopped = false;

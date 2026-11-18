@@ -2,6 +2,8 @@ import Link from "next/link";
 import { db } from "@/lib/db";
 import { catalogConfigured } from "@/lib/env";
 import { Empty, Flash, PageHeader, fmtDur, fmtSize } from "@/components/ui";
+import { getYtTestSettings } from "@/lib/seriesTest";
+import { SeriesTestCard } from "@/components/seriesTest";
 import { setSeriesBanAction, syncNowAction, toggleSeriesActiveAction, updateAssetAction, updateSeriesAction, updateEpisodeTitleAction } from "@/app/actions";
 
 const KIND_LABEL: Record<string, string> = { FULL_EPISODE: "Полная серия", VERTICAL: "Вертикальная", TEASER: "Анонс", COVER: "Обложка", SUBTITLES: "Субтитры" };
@@ -28,6 +30,13 @@ export default async function CatalogPage({ searchParams }: { searchParams: SP }
         },
       })
     : null;
+  const ytAccounts = selected
+    ? await db.socialAccount.findMany({ where: { platform: "YOUTUBE" }, include: { octoProfile: { select: { title: true } } }, orderBy: { handle: "asc" } })
+    : [];
+  const testJobs = selected
+    ? await db.publicationJob.findMany({ where: { id: { in: [selected.testJobId, selected.launchJobId].filter((x): x is string => Boolean(x)) } }, include: { account: true } })
+    : [];
+  const ytTest = await getYtTestSettings();
   const allSeries = unmapped.length ? await db.series.findMany({ select: { id: true, title: true }, orderBy: { title: "asc" } }) : [];
 
   return (
@@ -88,6 +97,8 @@ export default async function CatalogPage({ searchParams }: { searchParams: SP }
                   >
                     {s.title}
                   </Link>
+                  {s.stage === "TESTING" && <span className="rounded bg-amber-100 px-1.5 py-0.5 text-xs font-semibold text-amber-800 dark:bg-amber-950 dark:text-amber-300">ТЕСТ</span>}
+                  {s.stage === "TEST_FAILED" && <span className="rounded bg-red-100 px-1.5 py-0.5 text-xs font-semibold text-red-700 dark:bg-red-950 dark:text-red-300" title={s.testNote ?? undefined}>НЕ ПРОШЁЛ</span>}
                   <span className="text-xs muted whitespace-nowrap">{s._count.assets}{s.expectedEpisodes ? `/${s.expectedEpisodes}` : ""}</span>
                   {s.bannedAt ? (
                     <span className="rounded bg-red-100 px-1.5 py-0.5 text-xs font-semibold text-red-700 dark:bg-red-950 dark:text-red-300">INACTIVE</span>
@@ -131,6 +142,16 @@ export default async function CatalogPage({ searchParams }: { searchParams: SP }
                   </div>
                   <button className="btn btn-danger">Забанен → Inactive</button>
                 </form>
+              )}
+
+              {!selected.bannedAt && (
+                <SeriesTestCard
+                  series={selected}
+                  accounts={ytAccounts.map((a) => ({ id: a.id, label: `@${a.handle}${a.octoProfile ? ` · Octo «${a.octoProfile.title}»` : ""}${a.status !== "ACTIVE" ? " (не подключён)" : ""}` }))}
+                  defaults={ytTest}
+                  testJob={testJobs.find((j) => j.id === selected.testJobId) ?? null}
+                  launchJob={testJobs.find((j) => j.id === selected.launchJobId) ?? null}
+                />
               )}
 
               <form action={updateSeriesAction} className="card grid gap-3 p-4 md:grid-cols-2">
