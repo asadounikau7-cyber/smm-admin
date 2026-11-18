@@ -2,6 +2,7 @@ import { SignJWT, jwtVerify } from "jose";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { db } from "./db";
+import { loadIntegrationKeys } from "./integrationKeys";
 
 export const SESSION_COOKIE = "smm_session";
 const TTL_DAYS = 14;
@@ -42,6 +43,7 @@ export async function currentUser() {
 }
 
 export async function requireUser() {
+  await loadIntegrationKeys();
   const u = await currentUser();
   if (!u) redirect("/login");
   return u;

@@ -5,6 +5,7 @@ import { adapterFor } from "@/lib/adapters";
 import { igRefresh } from "@/lib/adapters/instagram";
 import { claim, runCancel, runJob } from "@/lib/runner";
 import { flushEmails, notify } from "@/lib/notify";
+import { loadIntegrationKeys } from "@/lib/integrationKeys";
 import { agentRenderOnline, claimRender, getRenderMode, renderOnServer } from "@/lib/renderJobs";
 
 const TICK_MS = 15_000;
@@ -101,6 +102,7 @@ async function maybeRender() {
 
 async function tick() {
   await heartbeat();
+  await loadIntegrationKeys();
   await maybeSync();
   await refreshTokens();
   await dispatchDue();

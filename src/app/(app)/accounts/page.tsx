@@ -1,5 +1,6 @@
 import { db } from "@/lib/db";
 import { env } from "@/lib/env";
+import { loadIntegrationKeys } from "@/lib/integrationKeys";
 import { Empty, Flash, PageHeader, PlatformTag } from "@/components/ui";
 import { addTikTokAccountAction, checkAccountAction, deleteAccountAction, updateAccountAction } from "@/app/actions";
 
@@ -7,6 +8,7 @@ const STATUS: Record<string, string> = { ACTIVE: "Активен", NEEDS_RECONNE
 
 export default async function AccountsPage({ searchParams }: { searchParams: Promise<{ ok?: string; err?: string }> }) {
   const sp = await searchParams;
+  await loadIntegrationKeys();
   const accounts = await db.socialAccount.findMany({ orderBy: [{ platform: "asc" }, { handle: "asc" }], include: { octoProfile: true, _count: { select: { jobs: true } } } });
   const e = env();
   const ytReady = Boolean(e.GOOGLE_CLIENT_ID && e.GOOGLE_CLIENT_SECRET);
@@ -15,8 +17,8 @@ export default async function AccountsPage({ searchParams }: { searchParams: Pro
   return (
     <div>
       <PageHeader title="Аккаунты">
-        {ytReady ? <a href="/api/oauth/youtube/start" className="btn">+ YouTube канал</a> : <span className="btn opacity-50" title="Заполните GOOGLE_CLIENT_ID / SECRET">+ YouTube (не настроено)</span>}
-        {igReady ? <a href="/api/oauth/instagram/start" className="btn">+ Instagram</a> : <span className="btn opacity-50" title="Заполните INSTAGRAM_APP_ID / SECRET">+ Instagram (не настроено)</span>}
+        {ytReady ? <a href="/api/oauth/youtube/start" className="btn">+ YouTube канал</a> : <span className="btn opacity-50" title="Вставьте ключи Google в «Настройках»">+ YouTube (не настроено)</span>}
+        {igReady ? <a href="/api/oauth/instagram/start" className="btn">+ Instagram</a> : <span className="btn opacity-50" title="Вставьте ключи Instagram в «Настройках»">+ Instagram (не настроено)</span>}
       </PageHeader>
       <Flash msg={sp.ok} />
       <Flash msg={sp.err} kind="err" />

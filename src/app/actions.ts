@@ -389,6 +389,18 @@ export async function saveSettingsAction(f: FormData) {
   revalidatePath("/settings");
 }
 
+export async function saveIntegrationKeysAction(f: FormData) {
+  const u = await requireOwner();
+  const { INTEGRATION_KEYS, saveIntegrationKeys } = await import("@/lib/integrationKeys");
+  const values = Object.fromEntries(INTEGRATION_KEYS.map((k) => [k, s(f, k)]));
+  const clear = INTEGRATION_KEYS.filter((k) => f.get(`clear_${k}`) === "on");
+  await saveIntegrationKeys(values, clear);
+  await audit("settings.keys", "Setting", "integrationKeys", u.id, { set: INTEGRATION_KEYS.filter((k) => values[k]), clear });
+  revalidatePath("/settings");
+  revalidatePath("/accounts");
+  redirect("/settings?ok=" + encodeURIComponent("Ключи сохранены. Подключать аккаунты можно сразу"));
+}
+
 export async function changeMyPasswordAction(f: FormData) {
   const u = await requireUser();
   const me = await db.user.findUniqueOrThrow({ where: { id: u.id } });

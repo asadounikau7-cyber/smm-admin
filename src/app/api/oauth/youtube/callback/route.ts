@@ -1,3 +1,4 @@
+import { loadIntegrationKeys } from "@/lib/integrationKeys";
 import { NextResponse } from "next/server";
 import { requireOwner } from "@/lib/auth";
 import { finishOAuth } from "@/lib/oauthState";
@@ -10,6 +11,7 @@ import { audit } from "@/lib/audit";
 const back = (q: string) => NextResponse.redirect(`${env().APP_URL}/accounts?${q}`);
 
 export async function GET(req: Request) {
+  await loadIntegrationKeys();
   const user = await requireOwner();
   const u = new URL(req.url);
   if (u.searchParams.get("error")) return back("err=" + encodeURIComponent("Google: " + u.searchParams.get("error")));

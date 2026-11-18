@@ -1,8 +1,9 @@
 import { db } from "@/lib/db";
-import { env, b2Configured } from "@/lib/env";
+import { env, b2Configured, fileEnv } from "@/lib/env";
+import { storedIntegrationKeys } from "@/lib/integrationKeys";
 import { requireUser } from "@/lib/auth";
 import { Flash, PageHeader } from "@/components/ui";
-import { changeMyPasswordAction, createUserAction, deleteUserAction, saveSettingsAction } from "@/app/actions";
+import { changeMyPasswordAction, saveIntegrationKeysAction, createUserAction, deleteUserAction, saveSettingsAction } from "@/app/actions";
 
 export default async function SettingsPage({ searchParams }: { searchParams: Promise<{ ok?: string; err?: string }> }) {
   const sp = await searchParams;
@@ -10,6 +11,16 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
   const [users, settings] = await Promise.all([db.user.findMany({ orderBy: { createdAt: "asc" } }), db.setting.findMany()]);
   const get = (k: string) => settings.find((x) => x.key === k)?.value;
   const e = env();
+  const stored = await storedIntegrationKeys();
+  const fe = fileEnv();
+  const KEYS = [
+    { k: "GOOGLE_CLIENT_ID", label: "Google Client ID", group: "YouTube" },
+    { k: "GOOGLE_CLIENT_SECRET", label: "Google Client Secret", group: "YouTube" },
+    { k: "INSTAGRAM_APP_ID", label: "Instagram App ID", group: "Instagram" },
+    { k: "INSTAGRAM_APP_SECRET", label: "Instagram App Secret", group: "Instagram" },
+    { k: "UPLOAD_POST_API_KEY", label: "Upload-Post API key", group: "TikTok" },
+  ] as const;
+  const hint = (v?: string) => (v ? `…${v.slice(-4)}` : "");
   const check = (ok: boolean) => (ok ? <span className="text-green-600">настроено</span> : <span className="muted">не настроено</span>);
 
   return (
@@ -33,8 +44,40 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
         <button className="btn btn-primary" disabled={me.role !== "OWNER"}>Сохранить</button>
       </form>
 
+      {me.role === "OWNER" && (
+        <form action={saveIntegrationKeysAction} className="card space-y-3 p-4 text-sm">
+          <h2 className="font-medium">Ключи площадок</h2>
+          <p className="text-xs muted">
+            Вставьте ключи сюда, на сервер заходить не нужно. Хранятся в базе в зашифрованном виде. Пустое поле — значение не меняется.
+          </p>
+          <div className="grid gap-1 rounded-lg p-3 text-xs" style={{ background: "var(--bg)" }}>
+            <div>Redirect URI для Google: <code className="select-all">{e.APP_URL}/api/oauth/youtube/callback</code></div>
+            <div>Redirect URI для Instagram: <code className="select-all">{e.APP_URL}/api/oauth/instagram/callback</code></div>
+          </div>
+          <div className="grid gap-3 md:grid-cols-2">
+            {KEYS.map(({ k, label, group }) => {
+              const fromDb = stored[k];
+              const fromFile = fe[k];
+              return (
+                <div key={k}>
+                  <label className="label">
+                    {group} · {label}{" "}
+                    {fromDb ? <span className="text-green-600">задан здесь {hint(fromDb)}</span> : fromFile ? <span className="text-green-600">задан в .env {hint(fromFile)}</span> : <span>не задан</span>}
+                  </label>
+                  <input name={k} type={k.endsWith("_ID") ? "text" : "password"} autoComplete="off" className="input" placeholder={fromDb || fromFile ? "оставьте пустым, чтобы не менять" : ""} />
+                  {fromDb && (
+                    <label className="mt-1 flex items-center gap-1.5 text-xs muted"><input type="checkbox" name={`clear_${k}`} /> удалить</label>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          <button className="btn btn-primary">Сохранить ключи</button>
+        </form>
+      )}
+
       <div className="card p-4 text-sm">
-        <h2 className="mb-2 font-medium">Интеграции (из .env)</h2>
+        <h2 className="mb-2 font-medium">Интеграции</h2>
         <ul className="space-y-1">
           <li>Каталог B2 (публичный реестр): {check(Boolean(e.B2_REGISTRY_URL))}</li>
           <li>Ключ B2 (S3 API): {check(b2Configured())}</li>

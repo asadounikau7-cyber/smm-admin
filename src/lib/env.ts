@@ -38,7 +38,23 @@ const schema = z.object({
 export type Env = z.infer<typeof schema>;
 
 let cached: Env | null = null;
+/** Integration keys entered in «Настройки» (stored encrypted in the DB); they win over .env. */
+let overrides: Partial<Env> = {};
+let merged: Env | null = null;
+
 export function env(): Env {
+  if (!cached) cached = schema.parse(process.env);
+  if (!merged) merged = { ...cached, ...overrides };
+  return merged;
+}
+
+export function setEnvOverrides(o: Partial<Env>) {
+  overrides = Object.fromEntries(Object.entries(o).filter(([, v]) => typeof v === "string" && v.trim() !== "")) as Partial<Env>;
+  merged = null;
+}
+
+/** Value from .env only (to show where a key comes from). */
+export function fileEnv(): Env {
   if (!cached) cached = schema.parse(process.env);
   return cached;
 }
