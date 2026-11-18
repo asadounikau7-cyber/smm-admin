@@ -52,7 +52,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
       <form action={saveYtTestSettingsAction} className="card grid gap-3 p-4 md:grid-cols-2">
         <h2 className="md:col-span-2 font-medium">YouTube-тест сериалов</h2>
         <p className="md:col-span-2 text-xs muted">
-          Каталог → сериал → «Отправить на тест»: серия уходит на тестовый канал. Если YouTube не отклонил и не заблокировал ролик за время наблюдения, сериал становится «в работе», а серия 1 сразу уходит на основной канал.
+          Каталог → сериал → «Отправить на тест»: серия уходит на тестовый канал. Если YouTube не отклонил и не заблокировал ролик за время наблюдения, сериал становится «в работе», и в его карточке появляется список серий для ручной загрузки на основной канал.
         </p>
         <div>
           <label className="label">Тестовый канал по умолчанию</label>
@@ -62,18 +62,18 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
           </select>
         </div>
         <div>
-          <label className="label">Основной канал по умолчанию</label>
+          <label className="label">Основной канал: автозагрузка серии 1 (только после аудита Google)</label>
           <select name="launchAccountId" defaultValue={ytTest.launchAccountId ?? ""} className="input">
-            <option value="">—</option>
+            <option value="">— вручную —</option>
             {ytAccounts.map((a) => <option key={a.id} value={a.id}>{ytLabel(a)}</option>)}
           </select>
         </div>
         <div>
           <label className="label">Доступ к тестовому ролику</label>
           <select name="visibility" defaultValue={ytTest.visibility} className="input">
-            <option value="UNLISTED">По ссылке (рекомендуется)</option>
-            <option value="PUBLIC">Открытый</option>
-            <option value="PRIVATE">Закрытый (пока Google-проект без аудита YouTube API)</option>
+            <option value="PRIVATE">Закрытый (рекомендуется)</option>
+            <option value="UNLISTED">По ссылке (только после аудита Google)</option>
+            <option value="PUBLIC">Открытый (только после аудита Google)</option>
           </select>
         </div>
         <div>

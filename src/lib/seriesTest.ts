@@ -27,7 +27,8 @@ export type YtTestSettings = {
   waitMin: number;
 };
 
-export const DEFAULT_YT_TEST: YtTestSettings = { testAccountId: null, launchAccountId: null, visibility: "UNLISTED", waitMin: 30 };
+/** Private by default: an API project without Google's audit can only upload private videos anyway. */
+export const DEFAULT_YT_TEST: YtTestSettings = { testAccountId: null, launchAccountId: null, visibility: "PRIVATE", waitMin: 30 };
 const RECHECK_MS = 3 * 60_000;
 
 export async function getYtTestSettings(): Promise<YtTestSettings> {
@@ -190,7 +191,7 @@ export async function markTestPassed(seriesId: string, note: string, userId?: st
   const job = series.testJobId ? await db.publicationJob.findUnique({ where: { id: series.testJobId } }) : null;
   const launchAccountId = ((job?.meta ?? {}) as { launchAccountId?: string | null }).launchAccountId ?? (await getYtTestSettings()).launchAccountId;
   if (!launchAccountId) {
-    await notify(`series-test:${seriesId}`, "series-test", `«${series.title}» прошёл тест и в работе. Основной канал не выбран, первую серию запустите вручную`, `/catalog?series=${seriesId}`);
+    await notify(`series-test:${seriesId}`, "series-test", `«${series.title}» прошёл тест и в работе: загрузите серии на основной канал вручную`, `/catalog?series=${seriesId}`);
     return;
   }
   try {

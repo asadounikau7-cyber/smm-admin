@@ -123,6 +123,9 @@ model Episode {
   season   Int
   number   Int
   title    String?
+  /// Manual upload to the main YouTube channel (until the API project passes Google's audit)
+  mainUrl      String?
+  mainPostedAt DateTime?
   assets   Asset[]
   variants VideoVariant[]
 

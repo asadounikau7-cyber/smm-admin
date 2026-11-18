@@ -49,24 +49,17 @@ export function SeriesTestCard(props: {
       </div>
       {series.testNote && <div className={`text-sm ${series.stage === "TEST_FAILED" ? "text-red-600" : ""}`}>{series.testNote}</div>}
       <JobLine label="Тестовый ролик" job={testJob} />
-      <JobLine label="Серия 1 на основном" job={launchJob} />
+      <JobLine label="Серия 1 на основном (авто)" job={launchJob} />
 
       {accounts.length === 0 ? (
         <div className="text-sm muted">Нет подключённых YouTube-каналов. Подключите их на странице «Аккаунты».</div>
       ) : series.stage !== "TESTING" ? (
-        <form action={startSeriesTestAction} className="grid gap-2 md:grid-cols-[1fr_1fr_90px_auto] md:items-end">
+        <form action={startSeriesTestAction} className="grid gap-2 md:grid-cols-[1fr_90px_auto] md:items-end">
           <input type="hidden" name="id" value={series.id} />
           <div>
             <label className="label">Тестовый канал</label>
             <select name="testAccountId" defaultValue={defaults.testAccountId ?? ""} className="input" required>
               <option value="">—</option>
-              {accounts.map((a) => <option key={a.id} value={a.id}>{a.label}</option>)}
-            </select>
-          </div>
-          <div>
-            <label className="label">Основной канал (серия 1 при успехе)</label>
-            <select name="launchAccountId" defaultValue={launchDefault} className="input">
-              <option value="">не публиковать сразу</option>
               {accounts.map((a) => <option key={a.id} value={a.id}>{a.label}</option>)}
             </select>
           </div>
@@ -102,7 +95,7 @@ export function SeriesTestCard(props: {
             </form>
           </>
         )}
-        {series.stage === "IN_WORK" && (!launchJob || ["CANCELLED", "FAILED"].includes(launchJob.status)) && accounts.length > 0 && (
+        {series.stage === "IN_WORK" && defaults.launchAccountId && (!launchJob || ["CANCELLED", "FAILED"].includes(launchJob.status)) && accounts.length > 0 && (
           <form action={launchSeriesAction} className="flex gap-1">
             <input type="hidden" name="id" value={series.id} />
             <select name="launchAccountId" defaultValue={launchDefault} className="input">

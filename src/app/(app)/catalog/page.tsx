@@ -4,6 +4,7 @@ import { catalogConfigured } from "@/lib/env";
 import { Empty, Flash, PageHeader, fmtDur, fmtSize } from "@/components/ui";
 import { getYtTestSettings } from "@/lib/seriesTest";
 import { SeriesTestCard } from "@/components/seriesTest";
+import { ManualUploads } from "@/components/manualUploads";
 import { setSeriesBanAction, syncNowAction, toggleSeriesActiveAction, updateAssetAction, updateSeriesAction, updateEpisodeTitleAction } from "@/app/actions";
 
 const KIND_LABEL: Record<string, string> = { FULL_EPISODE: "Полная серия", VERTICAL: "Вертикальная", TEASER: "Анонс", COVER: "Обложка", SUBTITLES: "Субтитры" };
@@ -153,6 +154,8 @@ export default async function CatalogPage({ searchParams }: { searchParams: SP }
                   launchJob={testJobs.find((j) => j.id === selected.launchJobId) ?? null}
                 />
               )}
+
+              {selected.stage === "IN_WORK" && !selected.bannedAt && <ManualUploads series={selected} />}
 
               <form action={updateSeriesAction} className="card grid gap-3 p-4 md:grid-cols-2">
                 <input type="hidden" name="id" value={selected.id} />

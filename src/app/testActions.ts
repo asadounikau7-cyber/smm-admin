@@ -86,3 +86,16 @@ export async function saveYtTestSettingsAction(f: FormData) {
   revalidatePath("/settings");
   redirect("/settings?ok=" + encodeURIComponent("Настройки YouTube-теста сохранены"));
 }
+
+/** Manual upload to the main channel: the operator pastes the link of the video they uploaded in YouTube Studio. */
+export async function markEpisodePostedAction(f: FormData) {
+  const u = await requireUser();
+  const id = s(f, "episodeId");
+  const url = s(f, "url");
+  const ep = await db.episode.findUniqueOrThrow({ where: { id } });
+  if (url && !/^https:\/\/(www\.|m\.)?(youtube\.com|youtu\.be)\//.test(url)) redirect(back(ep.seriesId, "err", "Нужна ссылка на ролик YouTube"));
+  await db.episode.update({ where: { id }, data: url ? { mainUrl: url, mainPostedAt: new Date() } : { mainUrl: null, mainPostedAt: null } });
+  await audit(url ? "episode.main.posted" : "episode.main.unposted", "Episode", id, u.id, { url: url || null });
+  revalidatePath("/catalog");
+  redirect(back(ep.seriesId, "ok", url ? `S${ep.season}E${ep.number} отмечена как загруженная` : "Отметка снята"));
+}
