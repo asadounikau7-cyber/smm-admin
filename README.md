@@ -56,8 +56,10 @@ docker compose exec -T db dropdb -U smm smm_restore_check
 1. [Google Cloud Console](https://console.cloud.google.com/) → новый проект → включите **YouTube Data API v3**.
 2. OAuth consent screen: External, добавьте scopes `youtube.upload`, `youtube`, `youtube.readonly`. Пока приложение не прошло проверку, добавьте в **Test users** Google-аккаунты владельцев каналов.
 3. Credentials → OAuth client ID → Web application. Redirect URI: `https://admin.<домен>/api/oauth/youtube/callback`.
-4. Впишите `GOOGLE_CLIENT_ID` и `GOOGLE_CLIENT_SECRET` в `.env`, затем `docker compose up -d`.
+4. Вставьте Client ID и Client secret в «Настройки → Ключи площадок» (или в `.env`).
 5. В админке «Аккаунты → + YouTube канал».
+
+**Аудит YouTube API.** Пока Google-проект не прошёл аудит (форма «YouTube API Services Audit and Quota Extension»), YouTube блокирует все загрузки через API как «Закрытые», сделать их открытыми нельзя. Админка это распознаёт и пишет об этом в публикации. До аудита тест сериала можно запускать с доступом «Закрытый» («Настройки → YouTube-тест»), а серии на основной канал выкладывать вручную. Пока consent screen в статусе Testing, доступ к каналам истекает через 7 дней: переведите его в In production.
 
 Квота по умолчанию 10 000 единиц в сутки, одна загрузка около 1 600, то есть примерно 6 загрузок в день на весь проект. Лимит задаётся в «Настройках». Увеличение квоты бесплатное, заявка подаётся через форму YouTube API Services.
 

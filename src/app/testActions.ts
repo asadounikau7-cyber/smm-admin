@@ -77,7 +77,7 @@ export async function saveYtTestSettingsAction(f: FormData) {
   const v = {
     testAccountId: s(f, "testAccountId") || null,
     launchAccountId: s(f, "launchAccountId") || null,
-    visibility: s(f, "visibility") === "PUBLIC" ? ("PUBLIC" as const) : ("UNLISTED" as const),
+    visibility: (["PUBLIC", "PRIVATE"].includes(s(f, "visibility")) ? s(f, "visibility") : "UNLISTED") as "UNLISTED" | "PUBLIC" | "PRIVATE",
     waitMin: Number.isFinite(wait) && wait >= 0 ? Math.min(wait, 24 * 60) : cur.waitMin,
   };
   if (v.testAccountId && v.testAccountId === v.launchAccountId) redirect("/settings?err=" + encodeURIComponent("Тестовый и основной канал должны быть разными"));

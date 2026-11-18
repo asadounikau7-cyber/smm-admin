@@ -73,6 +73,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
           <select name="visibility" defaultValue={ytTest.visibility} className="input">
             <option value="UNLISTED">По ссылке (рекомендуется)</option>
             <option value="PUBLIC">Открытый</option>
+            <option value="PRIVATE">Закрытый (пока Google-проект без аудита YouTube API)</option>
           </select>
         </div>
         <div>

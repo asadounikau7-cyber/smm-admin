@@ -174,6 +174,9 @@ export const youtube: PlatformAdapter = {
       throw new AdapterError("MODERATION", `YouTube: ${st.uploadStatus} ${st.rejectionReason ?? st.failureReason ?? ""}`);
     const url = `https://www.youtube.com/watch?v=${id}`;
     const target = job.visibility.toLowerCase();
+    const scheduleOver = !st.publishAt || Date.parse(st.publishAt) < Date.now() - 15 * 60_000;
+    if (st.uploadStatus === "processed" && target !== "private" && st.privacyStatus === "private" && scheduleOver)
+      throw new AdapterError("INVALID", LOCKED_PRIVATE);
     if (st.privacyStatus === target && !st.publishAt && st.uploadStatus === "processed")
       return { status: "PUBLISHED", externalId: id, externalUrl: url };
     return { status: "PROCESSING", externalId: id, externalUrl: url, recheckInSec: Math.max(60, Math.min(900, (job.scheduledAt.getTime() - Date.now()) / 1000)) };
@@ -279,6 +282,11 @@ export async function googleExchange(code: string, verifier: string) {
   const items = (ch.items ?? []) as { id: string; snippet: { title: string; customUrl?: string } }[];
   return { creds, channels: items };
 }
+
+/** Uploads through a Google Cloud project that hasn't passed YouTube's API audit are locked as private. */
+export const LOCKED_PRIVATE =
+  "YouTube оставил ролик закрытым: Google-проект ещё не прошёл аудит YouTube API, поэтому все загрузки через API блокируются как «Закрытые». " +
+  "Подайте заявку на аудит; до этого публикуйте эту серию вручную из профиля Octo";
 
 const REJECTION_RU: Record<string, string> = {
   claim: "заявка Content ID",

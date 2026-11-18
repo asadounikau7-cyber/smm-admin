@@ -22,7 +22,7 @@ export type YtTestSettings = {
   testAccountId: string | null;
   launchAccountId: string | null;
   /** How the test video is published on the test channel */
-  visibility: "UNLISTED" | "PUBLIC";
+  visibility: "UNLISTED" | "PUBLIC" | "PRIVATE";
   /** Minutes the test video must stay clean after YouTube finished processing it */
   waitMin: number;
 };
