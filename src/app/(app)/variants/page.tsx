@@ -84,7 +84,7 @@ export default async function VariantsPage({ searchParams }: { searchParams: Pro
             <label className="block">
               <span className="label">Сериал</span>
               <select name="seriesId" className="input" defaultValue={seriesId}>
-                {series.map((s) => <option key={s.id} value={s.id}>{s.title} ({s.episodes.length} сер.)</option>)}
+                {series.filter((s) => !s.bannedAt).map((s) => <option key={s.id} value={s.id}>{s.title} ({s.episodes.length} сер.)</option>)}
               </select>
             </label>
             <label className="block">
@@ -120,7 +120,7 @@ export default async function VariantsPage({ searchParams }: { searchParams: Pro
 
       <form className="mb-3 flex flex-wrap items-end gap-2 text-sm" method="get">
         <select name="series" defaultValue={seriesId} className="input !w-auto">
-          {series.map((s) => <option key={s.id} value={s.id}>{s.title}</option>)}
+          {series.map((s) => <option key={s.id} value={s.id}>{s.bannedAt ? "⛔ INACTIVE · " : ""}{s.title}</option>)}
         </select>
         <select name="account" defaultValue={sp.account ?? ""} className="input !w-auto">
           <option value="">Все аккаунты</option>

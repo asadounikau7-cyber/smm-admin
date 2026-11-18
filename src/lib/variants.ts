@@ -31,6 +31,7 @@ export type CreateVariantsInput = {
  */
 export async function createVariants(input: CreateVariantsInput) {
   const series = await db.series.findUniqueOrThrow({ where: { id: input.seriesId }, include: { episodes: { orderBy: [{ season: "asc" }, { number: "asc" }] } } });
+  if (series.bannedAt) throw new Error(`Сериал «${series.title}» помечен как Inactive (забанен)`);
   const tpl = input.templateId ? await db.editTemplate.findUnique({ where: { id: input.templateId } }) : null;
   const base = normalizeRecipe(tpl?.recipe ?? DEFAULT_RECIPE);
   const variation = normalizeVariation(tpl?.variation ?? {});

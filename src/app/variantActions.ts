@@ -74,6 +74,8 @@ export async function createVariantsAction(f: FormData) {
   const accountIds = f.getAll("accountIds").map(String).filter(Boolean);
   const pool = Math.min(200, Math.max(0, Number(s(f, "pool") || 0)));
   if (!accountIds.length && !pool) back("/variants", "Отметьте аккаунты или укажите, сколько версий сделать в запас", true);
+  const ser = await db.series.findUnique({ where: { id: seriesId } });
+  if (ser?.bannedAt) back("/variants", `Сериал «${ser.title}» помечен как Inactive (забанен)`, true);
   const r = await createVariants({ templateId: s(f, "templateId") || null, seriesId, episodes, accountIds, pool });
   await audit("variants.create", "Series", seriesId, u.id, { created: r.created, alreadyHad: r.alreadyHad, noSource: r.noSource });
   revalidatePath("/variants");

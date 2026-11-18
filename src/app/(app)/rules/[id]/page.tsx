@@ -10,7 +10,7 @@ export default async function RuleForm({ params, searchParams }: { params: Promi
   const { err } = await searchParams;
   const rule = id === "new" ? null : await db.releaseRule.findUnique({ where: { id } });
   const [series, accounts, otherRules] = await Promise.all([
-    db.series.findMany({ orderBy: [{ active: "desc" }, { title: "asc" }], select: { id: true, title: true, active: true } }),
+    db.series.findMany({ orderBy: [{ active: "desc" }, { title: "asc" }], select: { id: true, title: true, active: true, bannedAt: true } }),
     db.socialAccount.findMany({ where: { status: { not: "DISABLED" } }, orderBy: [{ platform: "asc" }, { handle: "asc" }] }),
     db.releaseRule.findMany({ where: { id: { not: id }, offsetFromRuleId: null }, select: { id: true, name: true } }),
   ]);
@@ -31,7 +31,7 @@ export default async function RuleForm({ params, searchParams }: { params: Promi
           <div>
             <label className="label">Сериал</label>
             <select name="seriesId" defaultValue={rule?.seriesId} className="input" required>
-              {series.map((s) => <option key={s.id} value={s.id}>{s.active ? "● " : ""}{s.title}</option>)}
+              {series.map((s) => <option key={s.id} value={s.id}>{s.bannedAt ? "⛔ INACTIVE · " : s.active ? "● " : ""}{s.title}</option>)}
             </select>
           </div>
           <div className="grid grid-cols-2 gap-2">

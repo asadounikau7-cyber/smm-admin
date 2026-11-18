@@ -54,7 +54,7 @@ function currentVersion(a: AssetWithVersion | null) {
 export async function buildWeek(weekStart: Date, userId: string | null) {
   const plan = await getOrCreatePlan(weekStart);
   const rules = (await db.releaseRule.findMany({
-    where: { enabled: true },
+    where: { enabled: true, series: { bannedAt: null } },
     include: { series: { include: { episodes: { orderBy: [{ season: "asc" }, { number: "asc" }] } } }, account: true },
     orderBy: { createdAt: "asc" },
   })) as RuleFull[];

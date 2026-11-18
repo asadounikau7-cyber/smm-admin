@@ -428,8 +428,31 @@ export async function toggleSeriesActiveAction(f: FormData) {
   await requireUser();
   const id = s(f, "id");
   const cur = await db.series.findUniqueOrThrow({ where: { id } });
+  if (cur.bannedAt && !cur.active) redirect(`/catalog?series=${id}&err=` + encodeURIComponent("Сериал забанен (Inactive). Сначала верните его в активные"));
   await db.series.update({ where: { id }, data: { active: !cur.active } });
   revalidatePath("/catalog");
+}
+
+/** Banned / Inactive: the series drops out of plans and new versions; already queued posts are reported, not touched. */
+export async function setSeriesBanAction(f: FormData) {
+  const u = await requireUser();
+  const id = s(f, "id");
+  const ban = s(f, "ban") === "1";
+  const back = `/catalog?series=${id}${s(f, "q") ? `&q=${encodeURIComponent(s(f, "q"))}` : ""}`;
+  await db.series.update({
+    where: { id },
+    data: ban ? { bannedAt: new Date(), banReason: s(f, "reason") || null, active: false } : { bannedAt: null, banReason: null },
+  });
+  await audit(ban ? "series.ban" : "series.unban", "Series", id, u.id, { reason: s(f, "reason") || null });
+  revalidatePath("/catalog");
+  if (!ban) redirect(back + "&ok=" + encodeURIComponent("Сериал снова активен"));
+  const queued = await db.publicationJob.count({ where: { rule: { seriesId: id }, status: { in: ["QUEUED", "MANUALLY_SCHEDULED", "ACTION_REQUIRED"] } } });
+  redirect(
+    back + "&ok=" + encodeURIComponent(
+      `Сериал помечен как Inactive (забанен) и больше не попадёт в план недели и новые версии` +
+        (queued ? `. Внимание: ${queued} публикаций уже утверждены — отмените их в «Публикациях», если нужно` : ""),
+    ),
+  );
 }
 
 // ---------- Octo Browser profiles ----------

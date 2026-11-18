@@ -29,7 +29,7 @@ export default async function RulesPage() {
                 return (
                   <tr key={r.id} className={r.enabled ? "" : "opacity-50"}>
                     <td className="font-medium">{r.name}</td>
-                    <td className="max-w-[220px] truncate">{r.series.title}</td>
+                    <td className={`max-w-[220px] truncate ${r.series.bannedAt ? "text-red-600" : ""}`}>{r.series.title}{r.series.bannedAt ? " · INACTIVE" : ""}</td>
                     <td>{KIND[r.assetKind]} · {r.language}</td>
                     <td><PlatformTag platform={r.account.platform} /> <span className="muted">@{r.account.handle} · {FORMAT_LABEL[r.format]}</span></td>
                     <td>{when} <span className="text-xs muted">{r.timezone}</span></td>

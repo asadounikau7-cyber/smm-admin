@@ -90,6 +90,9 @@ model Series {
   active    Boolean   @default(false)
   synopsis  String?
   hashtags  String?
+  /// Banned / Inactive: shown in red everywhere, excluded from plans and new versions
+  bannedAt  DateTime?
+  banReason String?
   createdAt DateTime  @default(now())
   episodes  Episode[]
   assets    Asset[]

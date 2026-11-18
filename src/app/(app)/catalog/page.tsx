@@ -2,7 +2,7 @@ import Link from "next/link";
 import { db } from "@/lib/db";
 import { catalogConfigured } from "@/lib/env";
 import { Empty, Flash, PageHeader, fmtDur, fmtSize } from "@/components/ui";
-import { syncNowAction, toggleSeriesActiveAction, updateAssetAction, updateSeriesAction, updateEpisodeTitleAction } from "@/app/actions";
+import { setSeriesBanAction, syncNowAction, toggleSeriesActiveAction, updateAssetAction, updateSeriesAction, updateEpisodeTitleAction } from "@/app/actions";
 
 const KIND_LABEL: Record<string, string> = { FULL_EPISODE: "Полная серия", VERTICAL: "Вертикальная", TEASER: "Анонс", COVER: "Обложка", SUBTITLES: "Субтитры" };
 
@@ -81,12 +81,22 @@ export default async function CatalogPage({ searchParams }: { searchParams: SP }
             <div className="card divide-y" style={{ borderColor: "var(--border)" }}>
               {series.map((s) => (
                 <div key={s.id} className={`flex items-center gap-2 px-3 py-2 text-sm ${sp.series === s.id ? "font-medium" : ""}`}>
-                  <Link href={`/catalog?series=${s.id}${q ? `&q=${encodeURIComponent(q)}` : ""}`} className="flex-1 truncate hover:underline">{s.title}</Link>
+                  <Link
+                    href={`/catalog?series=${s.id}${q ? `&q=${encodeURIComponent(q)}` : ""}`}
+                    className={`flex-1 truncate hover:underline ${s.bannedAt ? "text-red-600" : ""}`}
+                    title={s.bannedAt ? `Inactive (забанен)${s.banReason ? `: ${s.banReason}` : ""}` : undefined}
+                  >
+                    {s.title}
+                  </Link>
                   <span className="text-xs muted whitespace-nowrap">{s._count.assets}{s.expectedEpisodes ? `/${s.expectedEpisodes}` : ""}</span>
-                  <form action={toggleSeriesActiveAction}>
-                    <input type="hidden" name="id" value={s.id} />
-                    <button title="В работе" className={`text-xs ${s.active ? "text-green-600" : "muted"}`}>{s.active ? "● в работе" : "○"}</button>
-                  </form>
+                  {s.bannedAt ? (
+                    <span className="rounded bg-red-100 px-1.5 py-0.5 text-xs font-semibold text-red-700 dark:bg-red-950 dark:text-red-300">INACTIVE</span>
+                  ) : (
+                    <form action={toggleSeriesActiveAction}>
+                      <input type="hidden" name="id" value={s.id} />
+                      <button title="В работе" className={`text-xs ${s.active ? "text-green-600" : "muted"}`}>{s.active ? "● в работе" : "○"}</button>
+                    </form>
+                  )}
                 </div>
               ))}
             </div>
@@ -98,9 +108,34 @@ export default async function CatalogPage({ searchParams }: { searchParams: SP }
             <Empty>Выберите сериал слева. Отметка «в работе» поднимает сериал наверх списка и в правилах.</Empty>
           ) : (
             <div className="space-y-4">
+              {selected.bannedAt ? (
+                <form action={setSeriesBanAction} className="flex flex-wrap items-center gap-3 rounded-xl border border-red-300 bg-red-50 p-4 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
+                  <input type="hidden" name="id" value={selected.id} />
+                  <input type="hidden" name="q" value={q ?? ""} />
+                  <input type="hidden" name="ban" value="0" />
+                  <span className="rounded bg-red-600 px-2 py-0.5 text-xs font-bold text-white">INACTIVE</span>
+                  <span className="flex-1">
+                    Забанен {selected.bannedAt.toLocaleDateString("ru-RU")}
+                    {selected.banReason ? `: ${selected.banReason}` : ""}. Не попадает в план недели и новые версии.
+                  </span>
+                  <button className="btn btn-sm">Вернуть в активные</button>
+                </form>
+              ) : (
+                <form action={setSeriesBanAction} className="card flex flex-wrap items-end gap-2 p-4">
+                  <input type="hidden" name="id" value={selected.id} />
+                  <input type="hidden" name="q" value={q ?? ""} />
+                  <input type="hidden" name="ban" value="1" />
+                  <div className="min-w-48 flex-1">
+                    <label className="label">Причина (необязательно)</label>
+                    <input name="reason" placeholder="например, бан на YouTube" className="input" />
+                  </div>
+                  <button className="btn btn-danger">Забанен → Inactive</button>
+                </form>
+              )}
+
               <form action={updateSeriesAction} className="card grid gap-3 p-4 md:grid-cols-2">
                 <input type="hidden" name="id" value={selected.id} />
-                <div className="md:col-span-2 text-xs muted">ID {selected.slug}</div>
+                <div className={`md:col-span-2 text-xs ${selected.bannedAt ? "font-semibold text-red-600" : "muted"}`}>ID {selected.slug}{selected.bannedAt ? " · INACTIVE" : ""}</div>
                 <div><label className="label">Название</label><input name="title" defaultValue={selected.title} className="input" /></div>
                 <div><label className="label">Хештеги по умолчанию</label><input name="hashtags" defaultValue={selected.hashtags ?? ""} placeholder="#drama #shortdrama" className="input" /></div>
                 <div className="md:col-span-2"><label className="label">Синопсис</label><textarea name="synopsis" defaultValue={selected.synopsis ?? ""} rows={2} className="input" /></div>
