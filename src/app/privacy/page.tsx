@@ -24,7 +24,7 @@ export default function PrivacyPage() {
       <p>
         A channel can be disconnected at any time in the tool, or access can be revoked at
         {" "}<a className="underline" href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>.
-        After that the token is deleted on the next use attempt.
+        After that the tool can no longer act on the channel and marks it as disconnected.
       </p>
       <p>
         SMM Admin&apos;s use of information received from Google APIs adheres to the Google API Services User Data Policy, including
