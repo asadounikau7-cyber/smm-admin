@@ -92,6 +92,8 @@ export async function buildWeek(weekStart: Date, userId: string | null) {
     const slots = (rule.slots as Slot[]) ?? [];
     const resolved = slots
       .map((s) => ({ s, r: resolveSlot(weekStart, s, rule.timezone) }))
+      // Slots that have already passed this week get nothing: the next episode goes to the next free slot.
+      .filter(({ r }) => r.utc.getTime() > Date.now() + 15 * 60_000)
       .sort((a, b) => a.r.utc.getTime() - b.r.utc.getTime());
     const occupied = new Set(approvedHere.filter((j) => j.ruleId === rule.id).map((j) => (j.meta as { slotKey?: string } | null)?.slotKey));
 
