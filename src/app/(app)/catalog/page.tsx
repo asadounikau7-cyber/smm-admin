@@ -99,6 +99,8 @@ export default async function CatalogPage({ searchParams }: { searchParams: SP }
                     {s.title}
                   </Link>
                   {s.stage === "TESTING" && <span className="rounded bg-amber-100 px-1.5 py-0.5 text-xs font-semibold text-amber-800 dark:bg-amber-950 dark:text-amber-300">ТЕСТ</span>}
+                  {s.testQueuedAt && s.stage !== "TESTING" && <span className="rounded bg-sky-100 px-1.5 py-0.5 text-xs font-semibold text-sky-800 dark:bg-sky-950 dark:text-sky-300">В ОЧЕРЕДИ</span>}
+                  {s.stage === "IN_WORK" && <span className="rounded bg-green-100 px-1.5 py-0.5 text-xs font-semibold text-green-700 dark:bg-green-950 dark:text-green-300">В РАБОТЕ</span>}
                   {s.stage === "TEST_FAILED" && <span className="rounded bg-red-100 px-1.5 py-0.5 text-xs font-semibold text-red-700 dark:bg-red-950 dark:text-red-300" title={s.testNote ?? undefined}>НЕ ПРОШЁЛ</span>}
                   <span className="text-xs muted whitespace-nowrap">{s._count.assets}{s.expectedEpisodes ? `/${s.expectedEpisodes}` : ""}</span>
                   {s.bannedAt ? (

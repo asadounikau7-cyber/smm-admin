@@ -6,6 +6,7 @@ const ITEMS = [
   { href: "/", label: "Обзор" },
   { href: "/plan", label: "Неделя" },
   { href: "/publications", label: "Публикации" },
+  { href: "/youtube", label: "YouTube-конвейер" },
   { href: "/catalog", label: "Каталог" },
   { href: "/variants", label: "Версии" },
   { href: "/templates", label: "Шаблоны" },

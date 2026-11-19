@@ -12,6 +12,7 @@ import { VALIDATORS } from "./validators";
 import { ytVideoHealth } from "./adapters/youtube";
 import { notify, resolveNotification } from "./notify";
 import { audit } from "./audit";
+import { conveyorGeos, enqueueMain, getConveyorSettings, geoCountries } from "./conveyor";
 
 /**
  * YouTube test of a series: one episode goes to the test channel; if YouTube lets it live through the check window
@@ -70,7 +71,7 @@ function ytFormat(v: AssetVersion): PostFormat {
 
 const epLabel = (ep: Episode) => `S${String(ep.season).padStart(2, "0")}E${String(ep.number).padStart(2, "0")}`;
 
-type JobInput = {
+export type JobInput = {
   series: Series;
   ep: Episode;
   account: SocialAccount;
@@ -79,18 +80,17 @@ type JobInput = {
   meta: Record<string, unknown>;
 };
 
-/** Creates (or re-arms a cancelled/failed) publication that goes out right away. */
-async function queueNow(i: JobInput) {
+/** Creates (or re-arms a cancelled/failed) publication: right away, or at `at` (shown in time zone `tz`). */
+export async function queueAt(i: JobInput, at?: Date, tz: string = env().BASE_TIMEZONE) {
   if (i.account.platform !== "YOUTUBE") throw new Error(`@${i.account.handle} — не YouTube-канал`);
   if (i.account.status !== "ACTIVE") throw new Error(`Канал @${i.account.handle} не подключён (нужно переподключить на странице «Аккаунты»)`);
   const file = await fileFor(i.ep, i.account);
   if (!file) throw new Error(`Нет файла для ${epLabel(i.ep)}`);
   if (file.version.probeError) throw new Error(`Файл ${epLabel(i.ep)} не читается: ${file.version.probeError.slice(0, 150)}`);
 
-  const tz = env().BASE_TIMEZONE;
   const now = new Date();
-  const plan = await getOrCreatePlan(weekStartFor(now, tz));
-  const scheduledAt = new Date(now.getTime() + 30_000);
+  const scheduledAt = at ?? new Date(now.getTime() + 30_000);
+  const plan = await getOrCreatePlan(weekStartFor(scheduledAt, env().BASE_TIMEZONE));
   const title = `${i.series.title} — ${epLabel(i.ep)}${i.ep.title ? ` · ${i.ep.title}` : ""}`.slice(0, 100);
   const caption = renderCaption("{title} — S{season}E{episode}\n{hashtags}", {
     title: i.series.title,
@@ -141,7 +141,16 @@ async function loadSeries(seriesId: string) {
 }
 
 /** Sends one episode of the series to the test channel and puts the series into "testing". */
-export async function startSeriesTest(input: { seriesId: string; testAccountId: string; launchAccountId: string | null; episode?: number | null; userId?: string | null }) {
+export async function startSeriesTest(input: {
+  seriesId: string;
+  testAccountId: string;
+  launchAccountId: string | null;
+  episode?: number | null;
+  userId?: string | null;
+  /** Conveyor: upload at this time instead of right away */
+  at?: Date;
+  tz?: string;
+}) {
   const series = await loadSeries(input.seriesId);
   if (series.bannedAt) throw new Error("Сериал помечен как Inactive (забанен)");
   if (series.stage === "TESTING") throw new Error("Тест уже идёт");
@@ -151,17 +160,22 @@ export async function startSeriesTest(input: { seriesId: string; testAccountId: 
   const account = await db.socialAccount.findUniqueOrThrow({ where: { id: input.testAccountId } });
   const settings = await getYtTestSettings();
 
-  const job = await queueNow({
-    series,
-    ep,
-    account,
-    visibility: settings.visibility,
-    instanceKey: `test:${series.id}:${Date.now()}`,
-    meta: { purpose: "test", launchAccountId: input.launchAccountId },
-  });
+  const job = await queueAt(
+    {
+      series,
+      ep,
+      account,
+      visibility: settings.visibility,
+      instanceKey: `test:${series.id}:${Date.now()}`,
+      meta: { purpose: "test", launchAccountId: input.launchAccountId, conveyor: Boolean(input.at) },
+    },
+    input.at,
+    input.tz,
+  );
+  const when = input.at ? `в ${toLocal(input.at, input.tz ?? env().BASE_TIMEZONE, "HH:mm")} (${input.tz ?? env().BASE_TIMEZONE})` : "сейчас";
   await db.series.update({
     where: { id: series.id },
-    data: { stage: "TESTING", testJobId: job.id, testNote: `Загружаем ${epLabel(ep)} на @${account.handle}`, testLiveAt: null, testCheckedAt: null },
+    data: { stage: "TESTING", testJobId: job.id, testNote: `${epLabel(ep)} грузится на @${account.handle} ${when}`, testLiveAt: null, testCheckedAt: null, testQueuedAt: null },
   });
   await audit("series.test.start", "Series", series.id, input.userId ?? null, { jobId: job.id, account: account.handle, episode: epLabel(ep) });
   return job;
@@ -175,19 +189,27 @@ export async function launchFirstEpisode(seriesId: string, accountId: string, us
   if (!ep) throw new Error("В сериале нет серий");
   const account = await db.socialAccount.findUniqueOrThrow({ where: { id: accountId } });
   // instanceKey ends with ":ep:<id>" so the weekly planner treats this episode as already published on this channel.
-  const job = await queueNow({ series, ep, account, visibility: "PUBLIC", instanceKey: `launch:ep:${ep.id}`, meta: { purpose: "launch" } });
+  const job = await queueAt({ series, ep, account, visibility: "PUBLIC", instanceKey: `launch:ep:${ep.id}`, meta: { purpose: "launch" } });
   await db.series.update({ where: { id: series.id }, data: { launchJobId: job.id } });
   await audit("series.launch", "Series", series.id, userId ?? null, { jobId: job.id, account: account.handle });
   return job;
 }
 
-export async function markTestPassed(seriesId: string, note: string, userId?: string | null) {
+export async function markTestPassed(seriesId: string, note: string, userId?: string | null, allowedGeos?: string[]) {
+  const geos = allowedGeos ?? (await conveyorGeos());
   const series = await db.series.update({
     where: { id: seriesId },
-    data: { stage: "IN_WORK", inWorkAt: new Date(), active: true, testNote: note },
+    data: { stage: "IN_WORK", inWorkAt: new Date(), active: true, testNote: note, allowedGeos: geos },
   });
   await resolveNotification(`series-test:${seriesId}`);
-  await audit("series.test.passed", "Series", seriesId, userId ?? null, { note });
+  await audit("series.test.passed", "Series", seriesId, userId ?? null, { note, geos });
+  if ((await getConveyorSettings()).enabled && geos.length) {
+    const placed = await enqueueMain(seriesId);
+    if (placed.length) {
+      await db.series.update({ where: { id: seriesId }, data: { testNote: `${note}. В очереди: ${placed.map((p) => `@${p.handle}`).join(", ")}` } });
+      return;
+    }
+  }
   const job = series.testJobId ? await db.publicationJob.findUnique({ where: { id: series.testJobId } }) : null;
   const launchAccountId = ((job?.meta ?? {}) as { launchAccountId?: string | null }).launchAccountId ?? (await getYtTestSettings()).launchAccountId;
   if (!launchAccountId) {
@@ -252,8 +274,18 @@ async function checkOne(s: Series, settings: YtTestSettings) {
   const liveAt = s.testLiveAt ?? new Date(now);
   if (s.testCheckedAt && now - s.testCheckedAt.getTime() < RECHECK_MS) return;
   const health = await ytVideoHealth(job.account, job.externalId!, job.visibility.toLowerCase());
-  if (health.state === "bad") return markTestFailed(s.id, health.note);
+  // Blocked only in some countries: the series can still go to the geos where it plays.
+  let geos: string[] | undefined;
+  if (health.state === "bad") {
+    const ours = await conveyorGeos();
+    if (!health.region || !ours.length) return markTestFailed(s.id, health.note);
+    const { blocked, allowed } = health.region;
+    geos = ours.filter((g) => geoCountries(g).every((c) => !blocked?.includes(c) && (!allowed || allowed.includes(c))));
+    if (!geos.length) return markTestFailed(s.id, `${health.note}. Заблокирован во всех наших гео`);
+  }
   const left = Math.ceil((liveAt.getTime() + settings.waitMin * 60_000 - now) / 60_000);
-  if (health.state === "ok" && left <= 0) return markTestPassed(s.id, `Прошёл: ${settings.waitMin} мин на @${job.account.handle} без блокировок`);
-  await setNote(health.state === "pending" ? health.note : `Чисто, наблюдаем ещё ${left} мин`, { testLiveAt: liveAt, testCheckedAt: new Date(now) });
+  const partial = geos ? ` (только ${geos.join(", ")}: ${health.note})` : "";
+  if (health.state !== "pending" && left <= 0)
+    return markTestPassed(s.id, `Прошёл: ${settings.waitMin} мин на @${job.account.handle}${partial || " без блокировок"}`, null, geos);
+  await setNote(health.state === "pending" ? health.note : `Чисто${partial}, наблюдаем ещё ${left} мин`, { testLiveAt: liveAt, testCheckedAt: new Date(now) });
 }

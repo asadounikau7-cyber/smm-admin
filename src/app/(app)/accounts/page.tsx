@@ -28,7 +28,7 @@ export default async function AccountsPage({ searchParams }: { searchParams: Pro
       ) : (
         <div className="card scroll-x mb-6">
           <table className="tbl">
-            <thead><tr><th>Площадка</th><th>Аккаунт</th><th>Язык</th><th>Режим</th><th>Статус</th><th>Проверен</th><th></th></tr></thead>
+            <thead><tr><th>Площадка</th><th>Аккаунт</th><th>Язык</th><th>Гео · роль / режим</th><th>Статус</th><th>Проверен</th><th></th></tr></thead>
             <tbody>
               {accounts.map((a) => (
                 <tr key={a.id}>
@@ -41,6 +41,19 @@ export default async function AccountsPage({ searchParams }: { searchParams: Pro
                     <form action={updateAccountAction} className="flex gap-1">
                       <input type="hidden" name="id" value={a.id} />
                       <input name="language" defaultValue={a.language ?? ""} placeholder="en" className="input w-16" />
+                      {a.platform === "YOUTUBE" && (
+                        <>
+                          <select name="geo" defaultValue={a.geo ?? ""} className="input w-20" title="Гео аудитории канала">
+                            <option value="">гео</option>
+                            <option value="US">US</option>
+                            <option value="UK">UK</option>
+                          </select>
+                          <select name="role" defaultValue={a.role} className="input w-28" title="Роль в YouTube-конвейере">
+                            <option value="MAIN">Боевой</option>
+                            <option value="TEST">Тестовый</option>
+                          </select>
+                        </>
+                      )}
                       {a.platform === "TIKTOK" && (
                         <select name="mode" defaultValue={a.tiktokMode ?? "MANUAL"} className="input w-36">
                           <option value="MANUAL">Вручную (пакет)</option>

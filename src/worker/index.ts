@@ -7,11 +7,13 @@ import { claim, runCancel, runJob } from "@/lib/runner";
 import { flushEmails, notify } from "@/lib/notify";
 import { loadIntegrationKeys } from "@/lib/integrationKeys";
 import { checkSeriesTests } from "@/lib/seriesTest";
+import { scheduleMain, scheduleTests } from "@/lib/conveyor";
 import { agentRenderOnline, claimRender, getRenderMode, renderOnServer } from "@/lib/renderJobs";
 
 const TICK_MS = 15_000;
 let lastSync = 0;
 let lastRefresh = 0;
+let lastConveyor = 0;
 let stopping = false;
 
 async function heartbeat() {
@@ -109,6 +111,15 @@ async function tick() {
   await dispatchDue();
   await followUps();
   await checkSeriesTests();
+  if (Date.now() - lastConveyor > 2 * 60_000) {
+    lastConveyor = Date.now();
+    try {
+      for (const t of await scheduleTests()) console.log(`[conveyor] test «${t.series}» on @${t.account} at ${t.at.toISOString()}`);
+      for (const m of await scheduleMain()) console.log(`[conveyor] ${m.episode} on @${m.account} at ${m.at.toISOString()}`);
+    } catch (e) {
+      console.error("[conveyor]", e);
+    }
+  }
   await maybeRender();
   await flushEmails().catch((e) => console.error("[mail]", e));
 }

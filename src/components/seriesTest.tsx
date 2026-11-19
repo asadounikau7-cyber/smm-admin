@@ -2,7 +2,7 @@ import Link from "next/link";
 import type { Episode, PublicationJob, Series, SeriesStage, SocialAccount } from "@prisma/client";
 import { StatusBadge } from "./ui";
 import { AutoRefresh } from "./autoRefresh";
-import { decideSeriesTestAction, launchSeriesAction, resetSeriesTestAction, resumeSeriesTestAction, startSeriesTestAction } from "@/app/testActions";
+import { decideSeriesTestAction, launchSeriesAction, queueSeriesTestAction, resetSeriesTestAction, resumeSeriesTestAction, startSeriesTestAction } from "@/app/testActions";
 import type { YtTestSettings } from "@/lib/seriesTest";
 
 const STAGE: Record<SeriesStage, { label: string; cls: string }> = {
@@ -47,6 +47,18 @@ export function SeriesTestCard(props: {
         <h3 className="font-medium">Тест на YouTube</h3>
         <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${st.cls}`}>{st.label}</span>
       </div>
+      {series.testQueuedAt && series.stage !== "TESTING" && (
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <span className="rounded-full bg-sky-100 px-2 py-0.5 text-xs text-sky-800 dark:bg-sky-950 dark:text-sky-300">В очереди на тест</span>
+          <span className="muted text-xs">конвейер возьмёт в ближайший свободный слот тестового канала</span>
+          <form action={queueSeriesTestAction}>
+            <input type="hidden" name="id" value={series.id} />
+            <input type="hidden" name="on" value="0" />
+            <button className="btn btn-sm">Убрать из очереди</button>
+          </form>
+        </div>
+      )}
+      {series.allowedGeos.length > 0 && series.stage === "IN_WORK" && <div className="text-xs muted">Гео: {series.allowedGeos.join(", ")}</div>}
       {series.testNote && <div className={`text-sm ${series.stage === "TEST_FAILED" ? "text-red-600" : ""}`}>{series.testNote}</div>}
       <JobLine label="Тестовый ролик" job={testJob} />
       <JobLine label="Серия 1 на основном (авто)" job={launchJob} />
@@ -67,7 +79,12 @@ export function SeriesTestCard(props: {
             <label className="label">Серия</label>
             <input name="episode" type="number" min={1} defaultValue={series.episodes[0]?.number ?? 1} className="input" />
           </div>
-          <button className="btn btn-primary">{series.stage === "NEW" ? "Отправить на тест" : "Тестировать заново"}</button>
+          <div className="flex gap-2">
+            <button className="btn btn-primary">{series.stage === "NEW" ? "Отправить на тест сейчас" : "Тестировать заново"}</button>
+            {!series.testQueuedAt && series.stage !== "IN_WORK" && (
+              <button formAction={queueSeriesTestAction} name="on" value="1" className="btn" formNoValidate>В очередь на тест</button>
+            )}
+          </div>
         </form>
       ) : (
         <div className="text-xs muted">

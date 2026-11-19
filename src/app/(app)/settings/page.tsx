@@ -4,7 +4,8 @@ import { storedIntegrationKeys } from "@/lib/integrationKeys";
 import { requireUser } from "@/lib/auth";
 import { Flash, PageHeader } from "@/components/ui";
 import { getYtTestSettings } from "@/lib/seriesTest";
-import { saveYtTestSettingsAction } from "@/app/testActions";
+import { saveConveyorSettingsAction, saveYtTestSettingsAction } from "@/app/testActions";
+import { getConveyorSettings } from "@/lib/conveyor";
 import { changeMyPasswordAction, saveIntegrationKeysAction, createUserAction, deleteUserAction, saveSettingsAction } from "@/app/actions";
 
 export default async function SettingsPage({ searchParams }: { searchParams: Promise<{ ok?: string; err?: string }> }) {
@@ -15,6 +16,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
   const e = env();
   const stored = await storedIntegrationKeys();
   const ytTest = await getYtTestSettings();
+  const conv = await getConveyorSettings();
   const ytAccounts = await db.socialAccount.findMany({ where: { platform: "YOUTUBE" }, include: { octoProfile: { select: { title: true } } }, orderBy: { handle: "asc" } });
   const ytLabel = (a: (typeof ytAccounts)[number]) => `@${a.handle}${a.octoProfile ? ` · Octo «${a.octoProfile.title}»` : ""}`;
   const fe = fileEnv();
@@ -80,6 +82,40 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
           <label className="label">Наблюдать после загрузки, мин</label>
           <input name="waitMin" type="number" min={0} defaultValue={ytTest.waitMin} className="input" />
         </div>
+        <div><button className="btn btn-primary" disabled={me.role !== "OWNER"}>Сохранить</button></div>
+      </form>
+
+      <form action={saveConveyorSettingsAction} className="card space-y-3 p-4 text-sm">
+        <h2 className="font-medium">YouTube-конвейер</h2>
+        <p className="text-xs muted">
+          Тестовые каналы (роль «Тестовый» и гео в «Аккаунтах») каждый день сами проверяют сериалы в своих слотах по местному времени гео (US — Нью-Йорк, UK — Лондон).
+          Прошедший сериал встаёт в очередь боевого канала своего гео, и его первые серии выходят по слотам боевого канала. Подробности на странице «YouTube-конвейер».
+        </p>
+        <label className="flex items-center gap-2"><input type="checkbox" name="enabled" defaultChecked={conv.enabled} /> Конвейер включён</label>
+        <label className="flex items-center gap-2"><input type="checkbox" name="autoPick" defaultChecked={conv.autoPick} /> Если очередь на тест пуста, брать следующие непроверенные сериалы из каталога</label>
+        <div className="grid gap-3 md:grid-cols-2">
+          <div>
+            <label className="label">Слоты тестовых каналов (сколько слотов, столько сериалов в день на канал)</label>
+            <input name="testSlots" defaultValue={conv.testSlots.join(", ")} className="input" />
+          </div>
+          <div>
+            <label className="label">Случайный сдвиг теста, ± мин</label>
+            <input name="jitterMin" type="number" min={0} max={30} defaultValue={conv.jitterMin} className="input" />
+          </div>
+          <div>
+            <label className="label">Слоты боевых каналов</label>
+            <input name="mainSlots" defaultValue={conv.mainSlots.join(", ")} className="input" />
+          </div>
+          <div>
+            <label className="label">Сколько первых серий выкладывать на боевой</label>
+            <input name="mainEpisodes" type="number" min={1} defaultValue={conv.mainEpisodes} className="input" />
+          </div>
+          <div>
+            <label className="label">Пауза тестов, если боевые расписаны дальше чем на, дней</label>
+            <input name="backlogDays" type="number" min={1} defaultValue={conv.backlogDays} className="input" />
+          </div>
+        </div>
+        <p className="text-xs muted">Время слотов указывается в пределах 10:00–21:00. Второй тестовый канал того же гео сдвигается на 50 мин, чтобы каналы не грузили одновременно.</p>
         <div><button className="btn btn-primary" disabled={me.role !== "OWNER"}>Сохранить</button></div>
       </form>
 

@@ -109,6 +109,11 @@ model Series {
   testCheckedAt DateTime?
   inWorkAt      DateTime?
   launchJobId   String?
+  /// Waiting in the conveyor's test queue (set by a person); oldest first
+  testQueuedAt  DateTime?
+  /// Geos (US, UK) where the test video was not blocked; main channels of these geos get the series
+  allowedGeos   String[]  @default([])
+  queueItems    ChannelQueueItem[]
   createdAt DateTime  @default(now())
   episodes  Episode[]
   assets    Asset[]
@@ -189,6 +194,10 @@ model SocialAccount {
   handle         String
   displayName    String?
   language       String?
+  /// Audience country of the channel (US, UK): sets its time zone for the YouTube conveyor
+  geo            String?
+  /// TEST channels check new series; MAIN channels publish the ones that passed
+  role           AccountRole   @default(MAIN)
   status         AccountStatus @default(ACTIVE)
   tiktokMode     TikTokMode?
   /// AES-GCM encrypted JSON with tokens
@@ -203,8 +212,30 @@ model SocialAccount {
   createdAt      DateTime      @default(now())
   rules          ReleaseRule[]
   jobs           PublicationJob[]
+  queue          ChannelQueueItem[]
 
   @@unique([platform, externalId])
+}
+
+enum AccountRole {
+  MAIN
+  TEST
+}
+
+/// YouTube conveyor: episodes of passed series waiting for a free slot on a main channel, in order.
+model ChannelQueueItem {
+  id        String        @id @default(cuid())
+  accountId String
+  account   SocialAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  seriesId  String
+  series    Series        @relation(fields: [seriesId], references: [id], onDelete: Cascade)
+  episodeId String
+  position  Int
+  jobId     String?
+  createdAt DateTime      @default(now())
+
+  @@unique([accountId, episodeId])
+  @@index([accountId, jobId])
 }
 
 model ReleaseRule {

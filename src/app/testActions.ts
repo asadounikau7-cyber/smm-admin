@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import { requireOwner, requireUser } from "@/lib/auth";
 import { audit } from "@/lib/audit";
+import { getConveyorSettings, saveConveyorSettings } from "@/lib/conveyor";
 import { getYtTestSettings, launchFirstEpisode, markTestFailed, markTestPassed, saveYtTestSettings, startSeriesTest } from "@/lib/seriesTest";
 
 const s = (f: FormData, k: string) => {
@@ -108,4 +109,42 @@ export async function resumeSeriesTestAction(f: FormData) {
   await audit("series.test.resume", "Series", id, u.id);
   revalidatePath("/catalog");
   redirect(back(id, "ok", "Наблюдение за тестовым роликом продолжено"));
+}
+
+const times = (v: string) =>
+  [...new Set(v.split(/[,\s]+/).filter((x) => /^\d{1,2}:\d{2}$/.test(x)).map((x) => x.padStart(5, "0")))].filter((x) => x >= "10:00" && x <= "21:00").sort();
+
+export async function saveConveyorSettingsAction(f: FormData) {
+  const u = await requireOwner();
+  const cur = await getConveyorSettings();
+  const num = (k: string, min: number, max: number, def: number) => {
+    const n = Number(s(f, k));
+    return Number.isFinite(n) && s(f, k) !== "" ? Math.max(min, Math.min(max, Math.round(n))) : def;
+  };
+  const v = {
+    enabled: f.get("enabled") === "on",
+    autoPick: f.get("autoPick") === "on",
+    testSlots: times(s(f, "testSlots")),
+    jitterMin: num("jitterMin", 0, 30, cur.jitterMin),
+    mainSlots: times(s(f, "mainSlots")),
+    mainEpisodes: num("mainEpisodes", 1, 50, cur.mainEpisodes),
+    backlogDays: num("backlogDays", 1, 60, cur.backlogDays),
+  };
+  if (!v.testSlots.length || !v.mainSlots.length) redirect("/settings?err=" + encodeURIComponent("Укажите слоты в формате 11:00, 15:00 в пределах 10:00–21:00"));
+  await saveConveyorSettings(v);
+  await audit("settings.ytConveyor", "Setting", "ytConveyor", u.id, v);
+  revalidatePath("/settings");
+  redirect("/settings?ok=" + encodeURIComponent(v.enabled ? "Конвейер включён" : "Настройки конвейера сохранены"));
+}
+
+/** Adds the series to (or removes it from) the conveyor's test queue. */
+export async function queueSeriesTestAction(f: FormData) {
+  const u = await requireUser();
+  const id = s(f, "id");
+  const on = s(f, "on") === "1";
+  await db.series.update({ where: { id }, data: { testQueuedAt: on ? new Date() : null } });
+  await audit(on ? "series.test.queued" : "series.test.unqueued", "Series", id, u.id);
+  revalidatePath("/catalog");
+  revalidatePath("/youtube");
+  redirect(s(f, "back") || back(id, "ok", on ? "В очереди на тест: конвейер возьмёт его в ближайший слот" : "Убран из очереди на тест"));
 }

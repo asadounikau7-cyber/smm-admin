@@ -360,7 +360,8 @@ const REJECTION_RU: Record<string, string> = {
 export type VideoHealth =
   | { state: "ok"; note: string }
   | { state: "pending"; note: string }
-  | { state: "bad"; note: string };
+  /** `region` is set when the only problem is Content ID blocking the video in some countries. */
+  | { state: "bad"; note: string; region?: { blocked?: string[]; allowed?: string[] } };
 
 /**
  * What YouTube says about an uploaded video right now: removed, rejected, blocked by Content ID in some countries,
@@ -375,10 +376,10 @@ export async function ytVideoHealth(account: SocialAccount, videoId: string, exp
   if (st.uploadStatus === "failed") return { state: "bad", note: `YouTube не смог обработать файл: ${st.failureReason ?? ""}`.trim() };
   if (st.uploadStatus === "deleted") return { state: "bad", note: "Ролик удалён" };
   const rr = v.contentDetails?.regionRestriction;
-  if (rr?.blocked?.length) return { state: "bad", note: `Заблокирован в ${rr.blocked.length} странах (Content ID): ${rr.blocked.slice(0, 8).join(", ")}${rr.blocked.length > 8 ? "…" : ""}` };
-  if (rr?.allowed) return { state: "bad", note: `Доступен только в ${rr.allowed.length} странах (Content ID)` };
   if (st.uploadStatus !== "processed") return { state: "pending", note: "YouTube ещё обрабатывает ролик" };
-  // Only YouTube forcing a video private is a verdict; a person opening it in Studio is not.
   if (expectedPrivacy !== "private" && st.privacyStatus === "private") return { state: "bad", note: "YouTube сделал ролик закрытым" };
+  if (rr?.blocked?.length)
+    return { state: "bad", note: `Заблокирован в ${rr.blocked.length} странах (Content ID): ${rr.blocked.slice(0, 8).join(", ")}${rr.blocked.length > 8 ? "…" : ""}`, region: { blocked: rr.blocked } };
+  if (rr?.allowed) return { state: "bad", note: `Доступен только в ${rr.allowed.length} странах (Content ID): ${rr.allowed.slice(0, 8).join(", ")}`, region: { allowed: rr.allowed } };
   return { state: "ok", note: "Ролик доступен, блокировок нет" };
 }
