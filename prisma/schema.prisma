@@ -109,6 +109,8 @@ model Series {
   testCheckedAt DateTime?
   inWorkAt      DateTime?
   launchJobId   String?
+  /// Language of the content when it isn't English ("es"); a person can set "en" to override the guess
+  contentLang   String?
   /// Waiting in the conveyor's test queue (set by a person); oldest first
   testQueuedAt  DateTime?
   /// Geos (US, UK) where the test video was not blocked; main channels of these geos get the series

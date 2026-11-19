@@ -98,6 +98,7 @@ export default async function CatalogPage({ searchParams }: { searchParams: SP }
                   >
                     {s.title}
                   </Link>
+                  {s.contentLang && s.contentLang !== "en" && <span className="rounded bg-gray-100 px-1.5 py-0.5 text-xs font-semibold text-gray-700 dark:bg-gray-800 dark:text-gray-300" title="Язык контента: в автотест не берётся">{s.contentLang.toUpperCase()}</span>}
                   {s.stage === "TESTING" && <span className="rounded bg-amber-100 px-1.5 py-0.5 text-xs font-semibold text-amber-800 dark:bg-amber-950 dark:text-amber-300">ТЕСТ</span>}
                   {s.testQueuedAt && s.stage !== "TESTING" && <span className="rounded bg-sky-100 px-1.5 py-0.5 text-xs font-semibold text-sky-800 dark:bg-sky-950 dark:text-sky-300">В ОЧЕРЕДИ</span>}
                   {s.stage === "IN_WORK" && <span className="rounded bg-green-100 px-1.5 py-0.5 text-xs font-semibold text-green-700 dark:bg-green-950 dark:text-green-300">В РАБОТЕ</span>}
@@ -163,6 +164,13 @@ export default async function CatalogPage({ searchParams }: { searchParams: SP }
                 <input type="hidden" name="id" value={selected.id} />
                 <div className={`md:col-span-2 text-xs ${selected.bannedAt ? "font-semibold text-red-600" : "muted"}`}>ID {selected.slug}{selected.bannedAt ? " · INACTIVE" : ""}</div>
                 <div><label className="label">Название</label><input name="title" defaultValue={selected.title} className="input" /></div>
+                <div>
+                  <label className="label">Язык контента</label>
+                  <select name="contentLang" defaultValue={selected.contentLang ?? "en"} className="input">
+                    <option value="en">Английский</option>
+                    <option value="es">Испанский (в автотест не берётся)</option>
+                  </select>
+                </div>
                 <div><label className="label">Хештеги по умолчанию</label><input name="hashtags" defaultValue={selected.hashtags ?? ""} placeholder="#drama #shortdrama" className="input" /></div>
                 <div className="md:col-span-2"><label className="label">Синопсис</label><textarea name="synopsis" defaultValue={selected.synopsis ?? ""} rows={2} className="input" /></div>
                 <div><button className="btn">Сохранить сериал</button></div>

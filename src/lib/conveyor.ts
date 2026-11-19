@@ -109,7 +109,11 @@ export function testTimes(account: Pick<SocialAccount, "id">, index: number, day
 async function nextSeries(s: ConveyorSettings) {
   const queued = await db.series.findFirst({ where: { testQueuedAt: { not: null }, stage: { in: ["NEW", "TEST_FAILED"] }, bannedAt: null }, orderBy: { testQueuedAt: "asc" } });
   if (queued || !s.autoPick) return queued;
-  return db.series.findFirst({ where: { stage: "NEW", bannedAt: null, episodes: { some: {} } }, orderBy: [{ createdAt: "asc" }, { title: "asc" }] });
+  // Only English content for now: series marked as another language (e.g. Spanish) wait.
+  return db.series.findFirst({
+    where: { stage: "NEW", bannedAt: null, episodes: { some: {} }, OR: [{ contentLang: null }, { contentLang: "en" }] },
+    orderBy: [{ createdAt: "asc" }, { title: "asc" }],
+  });
 }
 
 /** Worker: fills today's free test slots on every test channel. Idempotent per slot. */

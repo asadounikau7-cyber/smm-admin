@@ -8,6 +8,7 @@ import { flushEmails, notify } from "@/lib/notify";
 import { loadIntegrationKeys } from "@/lib/integrationKeys";
 import { checkSeriesTests } from "@/lib/seriesTest";
 import { scheduleMain, scheduleTests } from "@/lib/conveyor";
+import { markSpanishSeries } from "@/lib/language";
 import { agentRenderOnline, claimRender, getRenderMode, renderOnServer } from "@/lib/renderJobs";
 
 const TICK_MS = 15_000;
@@ -30,6 +31,7 @@ async function maybeSync() {
   try {
     const r = await syncCatalog();
     console.log(`[sync] ${JSON.stringify(r)}`);
+    await markSpanishSeries();
     await probePending(50);
   } catch (e) {
     console.error("[sync]", e);
@@ -126,6 +128,7 @@ async function tick() {
 
 async function main() {
   console.log(`[worker] started, tz=${env().BASE_TIMEZONE}`);
+  await markSpanishSeries().then((n) => n && console.log(`[lang] marked ${n} Spanish series`)).catch((e) => console.error("[lang]", e));
   process.on("SIGTERM", () => (stopping = true));
   process.on("SIGINT", () => (stopping = true));
   while (!stopping) {

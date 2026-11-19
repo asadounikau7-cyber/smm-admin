@@ -98,7 +98,11 @@ export async function updateAssetAction(f: FormData) {
 export async function updateSeriesAction(f: FormData) {
   const u = await requireUser();
   const id = s(f, "id");
-  await db.series.update({ where: { id }, data: { title: s(f, "title"), hashtags: s(f, "hashtags") || null, synopsis: s(f, "synopsis") || null } });
+  const lang = s(f, "contentLang");
+  await db.series.update({
+    where: { id },
+    data: { title: s(f, "title"), hashtags: s(f, "hashtags") || null, synopsis: s(f, "synopsis") || null, ...(["en", "es"].includes(lang) ? { contentLang: lang } : {}) },
+  });
   await audit("series.update", "Series", id, u.id);
   revalidatePath("/catalog");
 }
