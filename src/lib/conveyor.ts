@@ -50,6 +50,8 @@ const CHANNEL_SHIFT_MIN = 50;
 /** A main-channel slot is taken if the channel already has a publication this close to it. */
 const SLOT_CLEARANCE_MIN = 90;
 const MAIN_DAYS_AHEAD = 2;
+/** Minimum distance between two uploads on one test channel. */
+const TEST_GAP_MIN = 150;
 
 export async function getConveyorSettings(): Promise<ConveyorSettings> {
   const s = await db.setting.findUnique({ where: { key: "ytConveyor" } });
@@ -127,9 +129,15 @@ export async function scheduleTests(now = new Date()) {
         select: { meta: true },
       });
       const used = new Set(taken.map((j) => (j.meta as { conveyorSlot?: string }).conveyorSlot));
+      // Anything else on this channel today (older slot times, manual tests) keeps its distance too.
+      const near = await db.publicationJob.findMany({
+        where: { accountId: account.id, status: { not: "CANCELLED" }, scheduledAt: { gte: day.toJSDate(), lt: day.plus({ days: 1 }).toJSDate() } },
+        select: { scheduledAt: true },
+      });
       for (const t of testTimes(account, index, day, s, tz)) {
         const key = `${day.toISODate()}|${t.slot}`;
         if (used.has(key) || t.at.getTime() < now.getTime() + 5 * 60_000) continue;
+        if (near.some((j) => Math.abs(j.scheduledAt.getTime() - t.at.getTime()) < TEST_GAP_MIN * 60_000)) continue;
         // A series that can't be tested (no file) is set aside and the next one is tried.
         for (let tries = 0; tries < 5; tries++) {
           const series = await nextSeries(s);
@@ -138,6 +146,7 @@ export async function scheduleTests(now = new Date()) {
             const job = await startSeriesTest({ seriesId: series.id, testAccountId: account.id, launchAccountId: null, at: t.at, tz });
             await db.publicationJob.update({ where: { id: job.id }, data: { meta: { ...((job.meta ?? {}) as object), conveyorSlot: key } } });
             created.push({ account: account.handle, series: series.title, at: t.at });
+            near.push({ scheduledAt: t.at });
             break;
           } catch (e) {
             await db.series.update({ where: { id: series.id }, data: { stage: "TEST_FAILED", testQueuedAt: null, testNote: `Не удалось поставить в тест: ${(e as Error).message}` } });
