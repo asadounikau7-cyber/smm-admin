@@ -52,6 +52,8 @@ const SLOT_CLEARANCE_MIN = 90;
 const MAIN_DAYS_AHEAD = 2;
 /** Minimum distance between two uploads on one test channel. */
 const TEST_GAP_MIN = 120;
+/** Days of tests planned ahead: today and tomorrow. */
+const TEST_DAYS_AHEAD = 2;
 /** Local hours a channel may publish in (slots and shifted test times stay inside). */
 export const WINDOW = { from: "09:00", to: "23:00" } as const;
 
@@ -140,36 +142,40 @@ export async function scheduleTests(now = new Date()) {
     if (!tests.length) continue;
     if ((await testBacklog(geo, s)) > s.backlogDays) continue;
     const tz = geoTz(geo);
-    const day = DateTime.fromJSDate(now, { zone: tz }).startOf("day");
-    for (const [index, account] of tests.entries()) {
-      const taken = await db.publicationJob.findMany({
-        where: { accountId: account.id, status: { not: "CANCELLED" }, meta: { path: ["conveyorSlot"], string_starts_with: `${day.toISODate()}|` } },
-        select: { meta: true },
-      });
-      const used = new Set(taken.map((j) => (j.meta as { conveyorSlot?: string }).conveyorSlot));
-      // Anything else on this channel today (older slot times, manual tests) keeps its distance too.
-      const near = await db.publicationJob.findMany({
-        where: { accountId: account.id, status: { not: "CANCELLED" }, scheduledAt: { gte: day.toJSDate(), lt: day.plus({ days: 1 }).toJSDate() } },
-        select: { scheduledAt: true },
-      });
-      for (const t of testTimes(account, index, day, s, tz)) {
-        const key = `${day.toISODate()}|${t.slot}`;
-        if (used.has(key) || t.at.getTime() < now.getTime() + 5 * 60_000) continue;
-        // A channel shifted far enough to land past the window skips that slot.
-        if (t.at.getTime() > at(day, WINDOW.to, tz).getTime()) continue;
-        if (near.some((j) => Math.abs(j.scheduledAt.getTime() - t.at.getTime()) < TEST_GAP_MIN * 60_000)) continue;
-        // A series that can't be tested (no file) is set aside and the next one is tried.
-        for (let tries = 0; tries < 5; tries++) {
-          const series = await nextSeries(s);
-          if (!series) break;
-          try {
-            const job = await startSeriesTest({ seriesId: series.id, testAccountId: account.id, launchAccountId: null, at: t.at, tz });
-            await db.publicationJob.update({ where: { id: job.id }, data: { meta: { ...((job.meta ?? {}) as object), conveyorSlot: key } } });
-            created.push({ account: account.handle, series: series.title, at: t.at });
-            near.push({ scheduledAt: t.at });
-            break;
-          } catch (e) {
-            await db.series.update({ where: { id: series.id }, data: { stage: "TEST_FAILED", testQueuedAt: null, testNote: `Не удалось поставить в тест: ${(e as Error).message}` } });
+    const today = DateTime.fromJSDate(now, { zone: tz }).startOf("day");
+    // Today and tomorrow are planned ahead, so the whole flow shows in Publications.
+    for (let d = 0; d < TEST_DAYS_AHEAD; d++) {
+      const day = today.plus({ days: d });
+      for (const [index, account] of tests.entries()) {
+        const taken = await db.publicationJob.findMany({
+          where: { accountId: account.id, status: { not: "CANCELLED" }, meta: { path: ["conveyorSlot"], string_starts_with: `${day.toISODate()}|` } },
+          select: { meta: true },
+        });
+        const used = new Set(taken.map((j) => (j.meta as { conveyorSlot?: string }).conveyorSlot));
+        // Anything else on this channel today (older slot times, manual tests) keeps its distance too.
+        const near = await db.publicationJob.findMany({
+          where: { accountId: account.id, status: { not: "CANCELLED" }, scheduledAt: { gte: day.toJSDate(), lt: day.plus({ days: 1 }).toJSDate() } },
+          select: { scheduledAt: true },
+        });
+        for (const t of testTimes(account, index, day, s, tz)) {
+          const key = `${day.toISODate()}|${t.slot}`;
+          if (used.has(key) || t.at.getTime() < now.getTime() + 5 * 60_000) continue;
+          // A channel shifted far enough to land past the window skips that slot.
+          if (t.at.getTime() > at(day, WINDOW.to, tz).getTime()) continue;
+          if (near.some((j) => Math.abs(j.scheduledAt.getTime() - t.at.getTime()) < TEST_GAP_MIN * 60_000)) continue;
+          // A series that can't be tested (no file) is set aside and the next one is tried.
+          for (let tries = 0; tries < 5; tries++) {
+            const series = await nextSeries(s);
+            if (!series) break;
+            try {
+              const job = await startSeriesTest({ seriesId: series.id, testAccountId: account.id, launchAccountId: null, at: t.at, tz });
+              await db.publicationJob.update({ where: { id: job.id }, data: { meta: { ...((job.meta ?? {}) as object), conveyorSlot: key } } });
+              created.push({ account: account.handle, series: series.title, at: t.at });
+              near.push({ scheduledAt: t.at });
+              break;
+            } catch (e) {
+              await db.series.update({ where: { id: series.id }, data: { stage: "TEST_FAILED", testQueuedAt: null, testNote: `Не удалось поставить в тест: ${(e as Error).message}` } });
+            }
           }
         }
       }
