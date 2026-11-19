@@ -170,6 +170,29 @@ describe("YouTube conveyor", () => {
     expect(items.map((i) => t3.find((j) => j.id === i.jobId)!.scheduledAt.getTime())).toEqual(t2);
   });
 
+  it("an uploaded video that slipped ahead of its turn is moved on YouTube to its place in the order", async () => {
+    const items = await db.channelQueueItem.findMany({ where: { accountId: ids.cv_m_us, jobId: { not: null } }, orderBy: { position: "asc" } });
+    const lastItem = items[items.length - 1];
+    const early = new Date(now.getTime() + 3 * 3600_000);
+    await db.publicationJob.update({
+      where: { id: lastItem.jobId! },
+      data: { status: "PROCESSING", externalId: "vid_slip", scheduledAt: early, meta: { purpose: "launch", conveyor: true, adapter: { videoId: "vid_slip", scheduledNatively: true } } },
+    });
+    const calls: { url: string; body?: string }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
+      calls.push({ url: String(url), body: init?.body as string | undefined });
+      return Response.json({ items: [] });
+    });
+    await scheduleMain(now);
+    const moved = await db.publicationJob.findUniqueOrThrow({ where: { id: lastItem.jobId! } });
+    expect(moved.scheduledAt.getTime()).toBeGreaterThan(early.getTime());
+    const put = calls.find((c) => c.body?.includes("vid_slip"));
+    expect(JSON.parse(put!.body!).status.publishAt).toBe(moved.scheduledAt.toISOString());
+    const all = await db.publicationJob.findMany({ where: { id: { in: items.map((i) => i.jobId!) } } });
+    const t = items.map((i) => all.find((j) => j.id === i.jobId)!.scheduledAt.getTime());
+    expect([...t].sort((a, b) => a - b)).toEqual(t);
+  });
+
   it("jitter never puts a test before 09:00", () => {
     const day = local(now).startOf("day");
     for (let i = 0; i < 50; i++) {

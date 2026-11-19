@@ -227,6 +227,11 @@ export const youtube: PlatformAdapter = {
       method: "PUT",
       body: JSON.stringify({ id, status: { privacyStatus: "private", publishAt: at.toISOString(), selfDeclaredMadeForKids: Boolean((job.meta as any)?.madeForKids) } }),
     });
+    // Make sure YouTube took the new time; otherwise the video would still go out at the old one.
+    const { body } = await api(job.account, `videos?part=status&id=${id}`);
+    const st = body.items?.[0]?.status;
+    if (st && (!st.publishAt || new Date(st.publishAt).getTime() !== at.getTime()))
+      throw new AdapterError("UNKNOWN_RESULT", `YouTube не принял новое время (publishAt ${st.publishAt ?? "нет"})`);
   },
 };
 

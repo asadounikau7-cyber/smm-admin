@@ -4,6 +4,9 @@ import type { SocialAccount } from "@prisma/client";
 import { db } from "./db";
 import { notify } from "./notify";
 import { queueAt, startSeriesTest } from "./seriesTest";
+import { adapterFor } from "./adapters";
+import { env } from "./env";
+import { toLocal } from "./time";
 
 /**
  * YouTube conveyor: test channels check new series every day at spread-out local times; series that pass
@@ -50,8 +53,8 @@ const CHANNEL_SHIFT_MIN = 50;
 /** A main-channel slot is taken if the channel already has a publication this close to it. */
 const SLOT_CLEARANCE_MIN = 90;
 const MAIN_DAYS_AHEAD = 2;
-/** Main jobs closer than this stay where they are when slots change (upload lead is 6 h). */
-const REPLAN_AFTER_MIN = 7 * 60;
+/** An uploaded main video is moved only if its publish time is further away than this. */
+const MOVE_UPLOADED_MIN = 30;
 /** Minimum distance between two uploads on one test channel. */
 const TEST_GAP_MIN = 120;
 /** Days of tests planned ahead: today and tomorrow. */
@@ -257,78 +260,103 @@ async function freeMainSlots(account: SocialAccount, s: ConveyorSettings, now: D
 
 /** Worker: gives free main-channel slots to the episodes waiting in line, in order. */
 /**
- * Keeps a main channel's queue in order on the current slots. Jobs not yet picked up for upload
- * (still QUEUED, beyond the upload lead) are "movable". If the movable and waiting episodes, taken in
- * queue order, would not sit exactly on the earliest free slots after the last fixed episode (slots
- * changed in Settings, or a series slipped ahead of an earlier one), the movable jobs are handed back
- * to the queue and placed again. queueAt reuses the same job rows. Idempotent once in order.
+ * Main channels: the queue goes out in order, each episode on the earliest free slot after the last
+ * fixed one, so a series' episodes follow each other. Episodes already given a time move when the
+ * order or the slots change: a job not yet uploaded just gets the new time; a video already uploaded
+ * with a scheduled publish time is moved on YouTube too. Published or about-to-publish ones stay.
  */
-async function replan(account: SocialAccount, s: ConveyorSettings, now: Date) {
-  const items = await db.channelQueueItem.findMany({ where: { accountId: account.id }, orderBy: { position: "asc" }, select: { jobId: true } });
-  const jobs = await db.publicationJob.findMany({
-    where: { id: { in: items.flatMap((i) => (i.jobId ? [i.jobId] : [])) } },
-    select: { id: true, status: true, externalId: true, scheduledAt: true },
-  });
-  const byId = new Map(jobs.map((j) => [j.id, j]));
-  const limit = now.getTime() + REPLAN_AFTER_MIN * 60_000;
-  const movable = (id: string | null) => {
-    const j = id ? byId.get(id) : undefined;
-    return !!j && j.status === "QUEUED" && !j.externalId && j.scheduledAt.getTime() > limit;
-  };
-  const moving = items.filter((i) => movable(i.jobId)).map((i) => i.jobId!);
-  if (!moving.length) return;
-  const fixedMax = Math.max(0, ...jobs.filter((j) => j.status !== "CANCELLED" && !movable(j.id)).map((j) => j.scheduledAt.getTime()));
-  const slots = (await freeMainSlots(account, s, now, new Set(moving))).filter((t) => t.getTime() > fixedMax);
-  const seq = items.filter((i) => !i.jobId || movable(i.jobId));
-  const inOrder = seq.every((i, k) => !i.jobId || slots[k]?.getTime() === byId.get(i.jobId)!.scheduledAt.getTime());
-  if (inOrder) return;
-  await db.publicationJob.updateMany({ where: { id: { in: moving }, status: "QUEUED" }, data: { status: "CANCELLED" } });
-  await db.channelQueueItem.updateMany({ where: { jobId: { in: moving } }, data: { jobId: null } });
-}
-
 export async function scheduleMain(now = new Date()) {
   const s = await getConveyorSettings();
   if (!s.enabled) return [];
   await backfillMain();
   const created: { account: string; episode: string; at: Date }[] = [];
   for (const account of await channels("MAIN")) {
-    await replan(account, s, now);
-    const waiting = await db.channelQueueItem.findMany({
-      where: { accountId: account.id, jobId: null },
-      orderBy: { position: "asc" },
-      include: { series: true },
-      take: 20,
-    });
-    if (!waiting.length) continue;
-    // Episodes go out in queue order: nothing new lands before an episode already placed.
-    const placed = await db.channelQueueItem.findMany({ where: { accountId: account.id, jobId: { not: null } }, select: { jobId: true } });
-    const last = await db.publicationJob.aggregate({
-      where: { id: { in: placed.map((p) => p.jobId!) }, status: { not: "CANCELLED" } },
-      _max: { scheduledAt: true },
-    });
-    const after = last._max.scheduledAt?.getTime() ?? 0;
-    const slots = (await freeMainSlots(account, s, now)).filter((t) => t.getTime() > after);
     const tz = geoTz(account.geo as Geo);
-    for (const item of waiting) {
-      const slot = slots.shift();
+    const items = await db.channelQueueItem.findMany({ where: { accountId: account.id }, orderBy: { position: "asc" }, include: { series: true } });
+    if (!items.length) continue;
+    const jobs = await db.publicationJob.findMany({
+      where: { id: { in: items.flatMap((i) => (i.jobId ? [i.jobId] : [])) } },
+      include: { account: true, assetVersion: { include: { asset: true } } },
+    });
+    const byId = new Map(jobs.map((j) => [j.id, j]));
+    const stuck = new Set<string>(); // uploaded videos YouTube wouldn't move: they stay where they are
+    const kind = (id: string | null) => {
+      const j = id ? byId.get(id) : undefined;
+      if (!j) return "none" as const;
+      if (stuck.has(j.id)) return "fixed" as const;
+      const st = ((j.meta ?? {}) as { adapter?: { scheduledNatively?: boolean; manualOpen?: boolean } }).adapter ?? {};
+      if (j.status === "QUEUED" && !j.externalId && j.scheduledAt.getTime() > now.getTime() + 20 * 60_000) return "queued" as const;
+      if (j.status === "PROCESSING" && j.externalId && st.scheduledNatively && !st.manualOpen && j.scheduledAt.getTime() > now.getTime() + MOVE_UPLOADED_MIN * 60_000)
+        return "uploaded" as const;
+      return "fixed" as const;
+    };
+    const plan = async () => {
+      const seq = items.filter((i) => ["none", "queued", "uploaded"].includes(kind(i.jobId)));
+      const moving = new Set(seq.flatMap((i) => (i.jobId ? [i.jobId] : [])));
+      const fixedMax = Math.max(0, ...jobs.filter((j) => j.status !== "CANCELLED" && !moving.has(j.id)).map((j) => j.scheduledAt.getTime()));
+      const slots = (await freeMainSlots(account, s, now, moving)).filter((t) => t.getTime() > fixedMax);
+      return { seq, slots };
+    };
+    // Uploaded videos move on YouTube first; one that can't be moved stays put and the plan is redone around it.
+    let { seq, slots } = await plan();
+    for (let pass = 0; pass < 3; pass++) {
+      let failed = false;
+      for (const [k, item] of seq.entries()) {
+        const job = item.jobId ? byId.get(item.jobId) : undefined;
+        const slot = slots[k];
+        if (!job || kind(job.id) !== "uploaded" || !slot || job.scheduledAt.getTime() === slot.getTime()) continue;
+        try {
+          await adapterFor(job.account)!.reschedule!(job, ((job.meta as any)?.adapter ?? {}) as Record<string, unknown>, slot);
+          await db.publicationJob.update({
+            where: { id: job.id },
+            data: { scheduledAt: slot, localTime: toLocal(slot, job.timezone), deadlineAt: new Date(slot.getTime() + env().CATCHUP_WINDOW_MIN * 60_000) },
+          });
+          job.scheduledAt = slot;
+        } catch (e) {
+          await notify(`conveyor:${item.id}`, "conveyor", `@${account.handle}: YouTube не дал перенести «${item.series.title}»: ${(e as Error).message.slice(0, 150)}`, "/youtube");
+          stuck.add(job.id);
+          failed = true;
+        }
+      }
+      if (!failed) break;
+      ({ seq, slots } = await plan());
+    }
+    if (!seq.length) continue;
+    for (const [k, item] of seq.entries()) {
+      const slot = slots[k];
+      const job = item.jobId ? byId.get(item.jobId) : undefined;
+      if (job) {
+        if (!slot) {
+          if (kind(job.id) === "queued") {
+            await db.publicationJob.update({ where: { id: job.id }, data: { status: "CANCELLED" } });
+            await db.channelQueueItem.update({ where: { id: item.id }, data: { jobId: null } });
+          }
+          continue;
+        }
+        if (job.scheduledAt.getTime() === slot.getTime() || kind(job.id) !== "queued") continue;
+        await db.publicationJob.update({
+          where: { id: job.id },
+          data: { scheduledAt: slot, localTime: toLocal(slot, job.timezone), deadlineAt: new Date(slot.getTime() + env().CATCHUP_WINDOW_MIN * 60_000) },
+        });
+        continue;
+      }
       if (!slot) break;
       const ep = await db.episode.findUnique({ where: { id: item.episodeId } });
       if (!ep) {
         await db.channelQueueItem.delete({ where: { id: item.id } });
-        continue;
+        break; // positions shift; the next tick places the rest
       }
       try {
         // ":ep:<id>" + purpose "launch" let the weekly planner count it as already out on this channel.
-        const job = await queueAt(
+        const j = await queueAt(
           { series: item.series, ep, account, visibility: "PUBLIC", instanceKey: `conveyor:ep:${ep.id}`, meta: { purpose: "launch", conveyor: true } },
           slot,
           tz,
         );
-        await db.channelQueueItem.update({ where: { id: item.id }, data: { jobId: job.id } });
+        await db.channelQueueItem.update({ where: { id: item.id }, data: { jobId: j.id } });
         created.push({ account: account.handle, episode: `${item.series.title} S${ep.season}E${ep.number}`, at: slot });
       } catch (e) {
         await notify(`conveyor:${item.id}`, "conveyor", `@${account.handle}: не удалось поставить «${item.series.title}» S${ep.season}E${ep.number}: ${(e as Error).message.slice(0, 150)}`, "/youtube");
-        slots.unshift(slot);
         break; // keep the order: don't jump ahead to the next episode
       }
     }
