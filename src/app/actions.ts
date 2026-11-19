@@ -13,6 +13,7 @@ import { probePending, syncCatalog } from "@/lib/sync";
 import { approveWeek, buildWeek, revalidatePlan } from "@/lib/planner";
 import { parseLocal, toLocal, type Slot } from "@/lib/time";
 import { adapterFor } from "@/lib/adapters";
+import { ytSetPrivacy } from "@/lib/adapters/youtube";
 import { makeCover } from "@/lib/covers";
 import { FORMAT_PLATFORM } from "@/lib/validators";
 
@@ -508,4 +509,28 @@ export async function agentCommandAction(f: FormData) {
   revalidatePath("/profiles");
   const back = s(f, "back");
   if (back.startsWith("/")) redirect(back);
+}
+
+/** Changes a YouTube video's visibility through the API and shows what YouTube actually kept. */
+export async function setYtPrivacyAction(f: FormData) {
+  const u = await requireOwner();
+  const job = await db.publicationJob.findUniqueOrThrow({ where: { id: s(f, "id") }, include: { account: true } });
+  const privacy = s(f, "privacy") as "public" | "unlisted" | "private";
+  const back = (kind: "ok" | "err", msg: string) => `/publications/${job.id}?${kind}=${encodeURIComponent(msg)}`;
+  if (job.platform !== "YOUTUBE" || !job.externalId || !["public", "unlisted", "private"].includes(privacy)) redirect(back("err", "Нечего менять"));
+  let msg: string;
+  let ok = false;
+  try {
+    const r = await ytSetPrivacy(job.account, job.externalId!, privacy, (job.meta ?? {}) as { madeForKids?: boolean; aiDisclosure?: boolean });
+    ok = r.privacyStatus === privacy;
+    msg = ok ? `YouTube принял: доступ «${privacy}»` : `YouTube оставил доступ «${r.privacyStatus}» вместо «${privacy}»: через API открыть нельзя, только в Studio`;
+    await audit("youtube.api.privacy", "PublicationJob", job.id, u.id, { asked: privacy, got: r.privacyStatus });
+  } catch (e) {
+    msg = `YouTube отказал: ${(e as Error).message.slice(0, 300)}`;
+    await audit("youtube.api.privacy", "PublicationJob", job.id, u.id, { asked: privacy, error: msg });
+  }
+  // Let the worker look at the video again right away.
+  if (["PROCESSING", "SENT"].includes(job.status)) await db.publicationJob.update({ where: { id: job.id }, data: { nextAttemptAt: new Date() } });
+  revalidatePath("/publications");
+  redirect(back(ok ? "ok" : "err", msg));
 }

@@ -62,7 +62,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
           </select>
         </div>
         <div>
-          <label className="label">Основной канал: автозагрузка серии 1 (только после аудита Google)</label>
+          <label className="label">Основной канал: автозагрузка серии 1 (закрытой, откроется через API или задачей «Открыть в Studio»)</label>
           <select name="launchAccountId" defaultValue={ytTest.launchAccountId ?? ""} className="input">
             <option value="">— вручную —</option>
             {ytAccounts.map((a) => <option key={a.id} value={a.id}>{ytLabel(a)}</option>)}
@@ -72,8 +72,8 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
           <label className="label">Доступ к тестовому ролику</label>
           <select name="visibility" defaultValue={ytTest.visibility} className="input">
             <option value="PRIVATE">Закрытый (рекомендуется)</option>
-            <option value="UNLISTED">По ссылке (только после аудита Google)</option>
-            <option value="PUBLIC">Открытый (только после аудита Google)</option>
+            <option value="UNLISTED">По ссылке (до аудита Google может остаться закрытым)</option>
+            <option value="PUBLIC">Открытый (до аудита Google может остаться закрытым)</option>
           </select>
         </div>
         <div>

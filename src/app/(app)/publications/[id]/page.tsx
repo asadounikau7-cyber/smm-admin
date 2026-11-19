@@ -2,14 +2,16 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { DateTime } from "luxon";
 import { db } from "@/lib/db";
-import { PageHeader, PlatformTag, StatusBadge, fmtDur, fmtSize } from "@/components/ui";
+import { Flash, PageHeader, PlatformTag, StatusBadge, fmtDur, fmtSize } from "@/components/ui";
 import { CopyButton } from "@/components/copy";
 import { FORMAT_LABEL } from "@/lib/validators";
 import { adapterFor } from "@/lib/adapters";
-import { agentCommandAction, cancelJobAction, generateCoverAction, manualStatusAction, rescheduleJobAction, retryJobAction } from "@/app/actions";
+import { agentCommandAction, cancelJobAction, generateCoverAction, manualStatusAction, rescheduleJobAction, retryJobAction, setYtPrivacyAction } from "@/app/actions";
+import { studioEditUrl } from "@/lib/adapters/youtube";
 
-export default async function JobPage({ params }: { params: Promise<{ id: string }> }) {
+export default async function JobPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ ok?: string; err?: string }> }) {
   const { id } = await params;
+  const sp = await searchParams;
   const j = await db.publicationJob.findUnique({
     where: { id },
     include: {
@@ -30,7 +32,8 @@ export default async function JobPage({ params }: { params: Promise<{ id: string
   const flags = [meta.aiDisclosure && "AI-контент", meta.paidPromotion && "Платное продвижение / реклама", meta.madeForKids && "Для детей"].filter(Boolean) as string[];
   const hb = (await db.setting.findUnique({ where: { key: "agentHeartbeat" } }))?.value as { at: string; octo?: { apiAvailable?: boolean } } | undefined;
   const agentApi = Boolean(hb && Date.now() - new Date(hb.at).getTime() < 60_000 && hb.octo?.apiAvailable);
-  const studioUrl = j.platform === "TIKTOK" ? "https://www.tiktok.com/tiktokstudio/upload" : j.platform === "INSTAGRAM" ? "https://www.instagram.com/" : "https://studio.youtube.com/";
+  const ytVideo = j.platform === "YOUTUBE" && j.externalId ? j.externalId : null;
+  const studioUrl = j.platform === "TIKTOK" ? "https://www.tiktok.com/tiktokstudio/upload" : j.platform === "INSTAGRAM" ? "https://www.instagram.com/" : ytVideo ? studioEditUrl(ytVideo) : "https://studio.youtube.com/";
   const tzLocal = DateTime.fromJSDate(j.scheduledAt, { zone: j.timezone }).toFormat("yyyy-LL-dd'T'HH:mm");
 
   return (
@@ -38,6 +41,8 @@ export default async function JobPage({ params }: { params: Promise<{ id: string
       <PageHeader title={`${a?.series?.title ?? "Публикация"}${a?.episode ? ` · S${a.episode.season}E${a.episode.number}` : ""}`}>
         <Link href="/publications" className="btn">← Все публикации</Link>
       </PageHeader>
+      <Flash msg={sp.ok} />
+      <Flash msg={sp.err} kind="err" />
 
       <div className="card mb-4 grid gap-3 p-4 text-sm md:grid-cols-3">
         <div><div className="label">Статус</div><StatusBadge status={j.status} /></div>
@@ -49,6 +54,22 @@ export default async function JobPage({ params }: { params: Promise<{ id: string
         {j.errorMessage && <div className="md:col-span-3 text-amber-700 dark:text-amber-400">{j.errorMessage}</div>}
         {meta.operatorConfirmed && <div className="md:col-span-3 text-xs muted">Подтверждено оператором: {meta.operatorConfirmed.by}, {new Date(meta.operatorConfirmed.at).toLocaleString("ru-RU")}</div>}
       </div>
+
+      {ytVideo && (
+        <section className="card mb-4 flex flex-wrap items-center gap-3 p-4 text-sm">
+          <a href={studioEditUrl(ytVideo)} target="_blank" className="btn">Открыть в Studio</a>
+          <form action={setYtPrivacyAction} className="flex items-center gap-2">
+            <input type="hidden" name="id" value={j.id} />
+            <select name="privacy" defaultValue={j.visibility === "PRIVATE" ? "unlisted" : j.visibility.toLowerCase()} className="input">
+              <option value="public">Открытый</option>
+              <option value="unlisted">По ссылке</option>
+              <option value="private">Закрытый</option>
+            </select>
+            <button className="btn">Сменить доступ через API</button>
+          </form>
+          {meta.adapter?.manualOpen && <span className="text-xs text-amber-700 dark:text-amber-400">API не открыл ролик: откройте его в Studio, админка сама увидит и отметит «Опубликовано».</span>}
+        </section>
+      )}
 
       {j.account.octoProfile && (
         <section className="card mb-4 flex flex-wrap items-center gap-3 p-4 text-sm">

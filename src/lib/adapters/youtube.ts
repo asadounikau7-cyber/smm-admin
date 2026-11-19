@@ -3,6 +3,8 @@ import { db } from "../db";
 import { env } from "../env";
 import { decryptJson, encryptJson } from "../crypto";
 import { mediaStream } from "../mediaSource";
+import { notify, resolveNotification } from "../notify";
+import { audit } from "../audit";
 import { AdapterError, classifyHttp, httpJson, type JobCtx, type Outcome, type PlatformAdapter } from "./types";
 
 export const YT_SCOPES = [
@@ -174,16 +176,39 @@ export const youtube: PlatformAdapter = {
       throw new AdapterError("MODERATION", `YouTube: ${st.uploadStatus} ${st.rejectionReason ?? st.failureReason ?? ""}`);
     const url = `https://www.youtube.com/watch?v=${id}`;
     const target = job.visibility.toLowerCase();
-    const scheduleOver = !st.publishAt || Date.parse(st.publishAt) < Date.now() - 15 * 60_000;
-    if (st.uploadStatus === "processed" && target !== "private" && st.privacyStatus === "private" && scheduleOver)
-      throw new AdapterError("INVALID", LOCKED_PRIVATE);
-    if (st.privacyStatus === target && !st.publishAt && st.uploadStatus === "processed")
-      return { status: "PUBLISHED", externalId: id, externalUrl: url };
-    return { status: "PROCESSING", externalId: id, externalUrl: url, recheckInSec: Math.max(60, Math.min(900, (job.scheduledAt.getTime() - Date.now()) / 1000)) };
+    const recheck = (sec: number) => Math.max(60, Math.min(900, Math.round(sec)));
+    if (st.uploadStatus !== "processed")
+      return { status: "PROCESSING", externalId: id, externalUrl: url, recheckInSec: recheck((job.scheduledAt.getTime() - Date.now()) / 1000) };
+    if (target === "private" || st.privacyStatus !== "private") {
+      if (state.manualOpen) await resolveNotification(`studio:${job.id}`);
+      const note = st.privacyStatus !== target ? `Доступ на YouTube: ${PRIVACY_RU[st.privacyStatus] ?? st.privacyStatus}` : undefined;
+      return { status: "PUBLISHED", externalId: id, externalUrl: url, note };
+    }
+    // Private on YouTube, but the job wants it open. Wait for the slot (YouTube may open it itself via publishAt).
+    const publishAt = st.publishAt ? Date.parse(st.publishAt) : 0;
+    const dueAt = Math.max(job.scheduledAt.getTime(), publishAt ? publishAt + 10 * 60_000 : 0);
+    if (Date.now() < dueAt)
+      return { status: "PROCESSING", externalId: id, externalUrl: url, recheckInSec: recheck((dueAt - Date.now()) / 1000 + 30), note: "Загружено закрытым, откроется в назначенное время" };
+    // The slot has passed and the video is still private: try opening it through the API once.
+    if (!state.apiOpenTried) {
+      const meta = (job.meta ?? {}) as { madeForKids?: boolean; aiDisclosure?: boolean };
+      let res: string;
+      try {
+        const r = await ytSetPrivacy(job.account, id, target as "public" | "unlisted", meta);
+        res = r.privacyStatus;
+      } catch (e) {
+        if (e instanceof AdapterError && (e.kind === "TRANSIENT" || e.kind === "RATE_LIMIT" || e.kind === "AUTH")) throw e;
+        res = `ошибка: ${(e as Error).message.slice(0, 200)}`;
+      }
+      await audit("youtube.api.open", "PublicationJob", job.id, null, { videoId: id, target, result: res });
+      if (res === target) return { status: "PUBLISHED", externalId: id, externalUrl: url, state: { apiOpenTried: true, apiOpenResult: res }, note: "Открыт через API" };
+      return studioTask(job, id, url, { apiOpenTried: true, apiOpenResult: res });
+    }
+    return studioTask(job, id, url, {});
   },
-
   async cancel(job, state) {
     const id = job.externalId ?? (state.videoId as string | undefined);
+    await resolveNotification(`studio:${job.id}`);
     if (!id) return; // nothing uploaded yet
     // Keep the uploaded file but make sure it never goes public.
     await api(job.account, "videos?part=status", {
@@ -204,6 +229,42 @@ export const youtube: PlatformAdapter = {
     });
   },
 };
+
+const PRIVACY_RU: Record<string, string> = { public: "открытый", unlisted: "по ссылке", private: "закрытый" };
+
+export const studioEditUrl = (videoId: string) => `https://studio.youtube.com/video/${videoId}/edit`;
+
+/** The API could not open the video: hand it to a person, keep checking until it is open in Studio. */
+async function studioTask(job: JobCtx, id: string, url: string, extra: Record<string, unknown>): Promise<Outcome> {
+  const target = PRIVACY_RU[job.visibility.toLowerCase()] ?? job.visibility;
+  const note = `Откройте ролик в Studio (доступ «${target}»): ${studioEditUrl(id)}`;
+  if (!(job.meta as any)?.adapter?.manualOpen)
+    await notify(`studio:${job.id}`, "studio", `@${job.account.handle}: время публикации наступило, откройте ролик в Studio`, `/publications/${job.id}`);
+  return { status: "PROCESSING", externalId: id, externalUrl: url, state: { ...extra, manualOpen: true }, recheckInSec: 600, note };
+}
+
+/**
+ * Changes a video's visibility through the API and reads back what YouTube actually kept.
+ * Unaudited Google projects may be refused or silently left private.
+ */
+export async function ytSetPrivacy(
+  account: SocialAccount,
+  videoId: string,
+  privacy: "public" | "unlisted" | "private",
+  meta: { madeForKids?: boolean; aiDisclosure?: boolean } = {},
+) {
+  await api(account, "videos?part=status", {
+    method: "PUT",
+    body: JSON.stringify({
+      id: videoId,
+      status: { privacyStatus: privacy, selfDeclaredMadeForKids: Boolean(meta.madeForKids), containsSyntheticMedia: Boolean(meta.aiDisclosure) },
+    }),
+  });
+  const { body } = await api(account, `videos?part=status&id=${videoId}`);
+  const st = body.items?.[0]?.status;
+  if (!st) throw new AdapterError("MODERATION", "Ролик не найден на YouTube");
+  return { privacyStatus: st.privacyStatus as string, publishAt: (st.publishAt as string | undefined) ?? null };
+}
 
 async function saveState(jobId: string, patch: Record<string, unknown>) {
   const j = await db.publicationJob.findUniqueOrThrow({ where: { id: jobId }, select: { meta: true } });
@@ -282,11 +343,6 @@ export async function googleExchange(code: string, verifier: string) {
   const items = (ch.items ?? []) as { id: string; snippet: { title: string; customUrl?: string } }[];
   return { creds, channels: items };
 }
-
-/** Uploads through a Google Cloud project that hasn't passed YouTube's API audit are locked as private. */
-export const LOCKED_PRIVATE =
-  "YouTube оставил ролик закрытым: Google-проект ещё не прошёл аудит YouTube API, поэтому все загрузки через API блокируются как «Закрытые». " +
-  "Подайте заявку на аудит; до этого публикуйте эту серию вручную из профиля Octo";
 
 const REJECTION_RU: Record<string, string> = {
   claim: "заявка Content ID",

@@ -2,9 +2,10 @@ import Link from "next/link";
 import { db } from "@/lib/db";
 import { PageHeader, PlatformTag, StatusBadge, Empty } from "@/components/ui";
 import { resolveNotificationAction } from "@/app/actions";
+import { studioEditUrl } from "@/lib/adapters/youtube";
 
 export default async function Dashboard() {
-  const [issues, notes, upcoming, lastSync, manual, counts] = await Promise.all([
+  const [issues, notes, upcoming, lastSync, manual, counts, studio] = await Promise.all([
     db.publicationJob.findMany({
       where: { status: { in: ["ACTION_REQUIRED", "FAILED", "UNKNOWN", "CANCEL_PENDING"] }, OR: [{ errorCode: null }, { errorCode: { not: "MANUAL" } }] },
       include: { account: true },
@@ -21,6 +22,12 @@ export default async function Dashboard() {
     db.setting.findUnique({ where: { key: "lastSync" } }),
     db.publicationJob.count({ where: { status: "ACTION_REQUIRED", errorCode: "MANUAL" } }),
     db.publicationJob.groupBy({ by: ["status"], _count: true, where: { scheduledAt: { gte: new Date(Date.now() - 7 * 86400_000) } } }),
+    db.publicationJob.findMany({
+      where: { status: "PROCESSING", platform: "YOUTUBE", meta: { path: ["adapter", "manualOpen"], equals: true } },
+      include: { account: true },
+      orderBy: { scheduledAt: "asc" },
+      take: 50,
+    }),
   ]);
   const c = Object.fromEntries(counts.map((x) => [x.status, x._count])) as Record<string, number>;
   const sent = (c.PUBLISHED ?? 0) + (c.FAILED ?? 0) + (c.UNKNOWN ?? 0);
@@ -45,6 +52,25 @@ export default async function Dashboard() {
           <span className="flex-1">Поставить в TikTok Studio: {manual} публикаций</span>
           <span className="underline">Открыть пакеты</span>
         </Link>
+      )}
+
+      {studio.length > 0 && (
+        <section className="card mb-4 p-4">
+          <h2 className="mb-1 font-medium">Открыть в YouTube Studio: {studio.length}</h2>
+          <p className="mb-3 text-xs muted">Время публикации наступило, а YouTube не дал открыть ролик через API. Откройте профиль Octo канала, нажмите «Открыть в Studio» и поставьте нужный доступ. Админка сама увидит это в течение 10 минут.</p>
+          <div className="divide-y" style={{ borderColor: "var(--border)" }}>
+            {studio.map((j) => (
+              <div key={j.id} className="flex flex-wrap items-center gap-3 py-2 text-sm">
+                <span className="whitespace-nowrap muted">{j.localTime}</span>
+                <span>@{j.account.handle}</span>
+                <span className="flex-1 truncate">{j.title ?? j.caption.split("\n")[0]}</span>
+                <span className="text-xs muted">{j.visibility === "PUBLIC" ? "открытый" : "по ссылке"}</span>
+                <a href={studioEditUrl(j.externalId!)} target="_blank" className="btn btn-sm btn-primary">Открыть в Studio</a>
+                <Link href={`/publications/${j.id}`} className="btn btn-sm">Задача</Link>
+              </div>
+            ))}
+          </div>
+        </section>
       )}
 
       <h2 className="mb-2 font-medium">Очередь исключений</h2>
