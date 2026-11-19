@@ -322,6 +322,7 @@ export async function ytVideoHealth(account: SocialAccount, videoId: string, exp
   if (rr?.blocked?.length) return { state: "bad", note: `Заблокирован в ${rr.blocked.length} странах (Content ID): ${rr.blocked.slice(0, 8).join(", ")}${rr.blocked.length > 8 ? "…" : ""}` };
   if (rr?.allowed) return { state: "bad", note: `Доступен только в ${rr.allowed.length} странах (Content ID)` };
   if (st.uploadStatus !== "processed") return { state: "pending", note: "YouTube ещё обрабатывает ролик" };
-  if (st.privacyStatus !== expectedPrivacy) return { state: "bad", note: `YouTube поменял доступ на «${st.privacyStatus}»` };
+  // Only YouTube forcing a video private is a verdict; a person opening it in Studio is not.
+  if (expectedPrivacy !== "private" && st.privacyStatus === "private") return { state: "bad", note: "YouTube сделал ролик закрытым" };
   return { state: "ok", note: "Ролик доступен, блокировок нет" };
 }

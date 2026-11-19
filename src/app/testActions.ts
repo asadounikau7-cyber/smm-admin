@@ -99,3 +99,13 @@ export async function markEpisodePostedAction(f: FormData) {
   revalidatePath("/catalog");
   redirect(back(ep.seriesId, "ok", url ? `S${ep.season}E${ep.number} отмечена как загруженная` : "Отметка снята"));
 }
+
+/** Back to watching the same test video (e.g. after a wrong automatic verdict). */
+export async function resumeSeriesTestAction(f: FormData) {
+  const u = await requireUser();
+  const id = s(f, "id");
+  await db.series.update({ where: { id }, data: { stage: "TESTING", testCheckedAt: null, testNote: "Наблюдение продолжено" } });
+  await audit("series.test.resume", "Series", id, u.id);
+  revalidatePath("/catalog");
+  redirect(back(id, "ok", "Наблюдение за тестовым роликом продолжено"));
+}

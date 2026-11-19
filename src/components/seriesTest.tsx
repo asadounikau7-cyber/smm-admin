@@ -2,7 +2,7 @@ import Link from "next/link";
 import type { Episode, PublicationJob, Series, SeriesStage, SocialAccount } from "@prisma/client";
 import { StatusBadge } from "./ui";
 import { AutoRefresh } from "./autoRefresh";
-import { decideSeriesTestAction, launchSeriesAction, resetSeriesTestAction, startSeriesTestAction } from "@/app/testActions";
+import { decideSeriesTestAction, launchSeriesAction, resetSeriesTestAction, resumeSeriesTestAction, startSeriesTestAction } from "@/app/testActions";
 import type { YtTestSettings } from "@/lib/seriesTest";
 
 const STAGE: Record<SeriesStage, { label: string; cls: string }> = {
@@ -76,7 +76,7 @@ export function SeriesTestCard(props: {
       )}
 
       <div className="flex flex-wrap gap-2">
-        {series.stage === "TESTING" && (
+        {(series.stage === "TESTING" || series.stage === "TEST_FAILED") && (
           <>
             <form action={decideSeriesTestAction}>
               <input type="hidden" name="id" value={series.id} />
@@ -89,6 +89,12 @@ export function SeriesTestCard(props: {
               <input name="note" placeholder="причина, напр. claim в Studio" className="input w-56" />
               <button className="btn btn-sm btn-danger">Не прошёл</button>
             </form>
+            {series.stage === "TEST_FAILED" && testJob?.externalId && (
+              <form action={resumeSeriesTestAction}>
+                <input type="hidden" name="id" value={series.id} />
+                <button className="btn btn-sm">Продолжить наблюдение</button>
+              </form>
+            )}
             <form action={resetSeriesTestAction}>
               <input type="hidden" name="id" value={series.id} />
               <button className="btn btn-sm">Сбросить</button>
