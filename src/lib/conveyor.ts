@@ -95,6 +95,18 @@ export async function backlogDays(geo: Geo, s: ConveyorSettings) {
   return pending / (mains.length * s.mainSlots.length);
 }
 
+/**
+ * Backlog that throttles tests on a geo's test channels. A test result covers every geo
+ * (YouTube's region data decides where the series may go), so test channels of a geo with
+ * no main channel yet keep testing for the geos that have one.
+ */
+async function testBacklog(geo: Geo, s: ConveyorSettings) {
+  const own = await backlogDays(geo, s);
+  if (own !== Infinity) return own;
+  const others = await Promise.all((await conveyorGeos()).map((g) => backlogDays(g, s)));
+  return others.length ? Math.min(...others) : Infinity;
+}
+
 // ---------- tests ----------
 
 /** Planned test times for one channel on one local day. */
@@ -124,7 +136,7 @@ export async function scheduleTests(now = new Date()) {
   for (const geo of Object.keys(GEOS) as Geo[]) {
     const tests = await channels("TEST", geo);
     if (!tests.length) continue;
-    if ((await backlogDays(geo, s)) > s.backlogDays) continue;
+    if ((await testBacklog(geo, s)) > s.backlogDays) continue;
     const tz = geoTz(geo);
     const day = DateTime.fromJSDate(now, { zone: tz }).startOf("day");
     for (const [index, account] of tests.entries()) {

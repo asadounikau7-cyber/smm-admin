@@ -123,4 +123,13 @@ describe("YouTube conveyor", () => {
     expect(local(uk[0].at, "Europe/London").toFormat("HH:mm")).toBe("14:00");
     expect(await scheduleMain(now)).toHaveLength(0); // remaining slots already given out
   });
+
+  it("a test channel in a geo with no main channel still tests (for the other geos)", async () => {
+    // UK has only a test channel now; the US test channels are switched off for this check.
+    await db.socialAccount.update({ where: { id: ids.cv_m_uk }, data: { role: "TEST" } });
+    await db.socialAccount.updateMany({ where: { id: { in: [ids.cv_t_us1, ids.cv_t_us2] } }, data: { status: "DISABLED" } });
+    await db.series.update({ where: { id: ids["conv-e"] }, data: { testQueuedAt: new Date() } });
+    const created = await scheduleTests(DateTime.fromJSDate(now).plus({ days: 1 }).toJSDate());
+    expect(created.map((c) => [c.account, c.series])).toEqual([["cv_m_uk", "Conv conv-e"]]);
+  });
 });
