@@ -462,6 +462,17 @@ export async function setSeriesBanAction(f: FormData) {
   await audit(ban ? "series.ban" : "series.unban", "Series", id, u.id, { reason: s(f, "reason") || null });
   revalidatePath("/catalog");
   if (!ban) redirect(back + "&ok=" + encodeURIComponent("Сериал снова активен"));
+  // Conveyor: uploads that haven't started are dropped (a test slot then goes to the next series).
+  const pending = await db.publicationJob.findMany({
+    where: { meta: { path: ["seriesId"], equals: id }, status: { in: ["QUEUED", "DRAFT", "BLOCKED"] }, externalId: null },
+    select: { id: true },
+  });
+  if (pending.length) {
+    await db.publicationJob.updateMany({ where: { id: { in: pending.map((p) => p.id) } }, data: { status: "CANCELLED", nextAttemptAt: null } });
+    await audit("series.ban.cancelJobs", "Series", id, u.id, { jobs: pending.map((p) => p.id) });
+  }
+  await db.channelQueueItem.deleteMany({ where: { seriesId: id, jobId: null } });
+  await db.series.update({ where: { id }, data: { testQueuedAt: null } });
   const queued = await db.publicationJob.count({ where: { rule: { seriesId: id }, status: { in: ["QUEUED", "MANUALLY_SCHEDULED", "ACTION_REQUIRED"] } } });
   redirect(
     back + "&ok=" + encodeURIComponent(
