@@ -186,24 +186,16 @@ export const youtube: PlatformAdapter = {
     }
     // Private on YouTube, but the job wants it open. Wait for the slot (YouTube may open it itself via publishAt).
     let publishAt = st.publishAt ? Date.parse(st.publishAt) : 0;
-    // The job was moved (conveyor order, «Перенести») but YouTube still holds another publish time:
-    // set it again; if YouTube keeps the old one, take the video off YouTube's schedule so it can't go
-    // out at the wrong time (at the slot the admin opens it or asks for Studio).
-    if (publishAt && Math.abs(publishAt - job.scheduledAt.getTime()) > 60_000 && job.scheduledAt.getTime() > Date.now() + 10 * 60_000) {
-      const mk = Boolean((job.meta as any)?.madeForKids);
-      const put = (at: string | null) =>
-        api(job.account, "videos?part=status", { method: "PUT", body: JSON.stringify({ id, status: { privacyStatus: "private", publishAt: at, selfDeclaredMadeForKids: mk } }) });
-      const read = async () => {
-        const { body: b } = await api(job.account, `videos?part=status&id=${id}`);
-        return b.items?.[0]?.status?.publishAt ? Date.parse(b.items[0].status.publishAt) : 0;
-      };
-      await put(job.scheduledAt.toISOString());
-      publishAt = await read();
-      if (publishAt && Math.abs(publishAt - job.scheduledAt.getTime()) > 60_000) {
-        await put(null);
-        publishAt = await read();
-        await audit("youtube.publishAt.cleared", "PublicationJob", job.id, null, { videoId: id });
-      }
+    // YouTube's publish time must match the job (it moves with the conveyor order or «Перенести»).
+    // If it differs or is missing, set it again; YouTube's read-back can lag, so each check repeats this
+    // until it matches rather than trusting one read.
+    if (state.scheduledNatively && Math.abs(publishAt - job.scheduledAt.getTime()) > 60_000 && job.scheduledAt.getTime() > Date.now() + 10 * 60_000) {
+      await api(job.account, "videos?part=status", {
+        method: "PUT",
+        body: JSON.stringify({ id, status: { privacyStatus: "private", publishAt: job.scheduledAt.toISOString(), selfDeclaredMadeForKids: Boolean((job.meta as any)?.madeForKids) } }),
+      });
+      await audit("youtube.publishAt.set", "PublicationJob", job.id, null, { videoId: id, was: publishAt ? new Date(publishAt).toISOString() : null, to: job.scheduledAt.toISOString() });
+      publishAt = job.scheduledAt.getTime();
     }
     const dueAt = Math.max(job.scheduledAt.getTime(), publishAt ? publishAt + 10 * 60_000 : 0);
     const when = publishAt
@@ -249,11 +241,7 @@ export const youtube: PlatformAdapter = {
       method: "PUT",
       body: JSON.stringify({ id, status: { privacyStatus: "private", publishAt: at.toISOString(), selfDeclaredMadeForKids: Boolean((job.meta as any)?.madeForKids) } }),
     });
-    // Make sure YouTube took the new time; otherwise the video would still go out at the old one.
-    const { body } = await api(job.account, `videos?part=status&id=${id}`);
-    const st = body.items?.[0]?.status;
-    if (st && (!st.publishAt || new Date(st.publishAt).getTime() !== at.getTime()))
-      throw new AdapterError("UNKNOWN_RESULT", `YouTube не принял новое время (publishAt ${st.publishAt ?? "нет"})`);
+    // YouTube's read-back lags, so no check here: each status check compares and sets the time again.
   },
 };
 
