@@ -127,7 +127,7 @@ export async function buildWeek(weekStart: Date, userId: string | null) {
         .map((j) => j.instanceKey.split(":ep:")[1])
         .filter(Boolean),
     );
-    const queue = rule.series.episodes.filter((e) => !done.has(e.id));
+    const queue = rule.series.episodes.slice(0, rule.maxEpisodes ?? undefined).filter((e) => !done.has(e.id));
     let stopped = false;
     for (const { s, r } of resolved) {
       const slotKey = `${s.weekday}-${s.time}`;

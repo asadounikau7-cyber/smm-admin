@@ -102,6 +102,10 @@ export default async function RuleForm({ params, searchParams }: { params: Promi
           <div><label className="label">CTA</label><input name="cta" defaultValue={rule?.cta ?? ""} placeholder="Watch the next episode on our channel!" className="input" /></div>
           <div><label className="label">Хештеги (иначе — из сериала)</label><input name="hashtags" defaultValue={rule?.hashtags ?? ""} className="input" /></div>
         </div>
+        <div className="max-w-xs">
+          <label className="label">Публиковать только первые N серий (пусто = все)</label>
+          <input type="number" name="maxEpisodes" min={1} defaultValue={rule ? (rule.maxEpisodes ?? "") : 3} className="input" />
+        </div>
         <div className="flex flex-wrap gap-4 text-sm">
           <label className="flex items-center gap-2"><input type="checkbox" name="strictOrder" defaultChecked={rule?.strictOrder ?? true} /> Строгий порядок серий</label>
           <label className="flex items-center gap-2"><input type="checkbox" name="requireVariant" defaultChecked={rule?.requireVariant ?? false} /> Только своя версия аккаунта (без версии — не публиковать оригинал)</label>

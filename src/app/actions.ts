@@ -199,6 +199,7 @@ export async function saveRuleAction(f: FormData) {
     cta: s(f, "cta") || null,
     hashtags: s(f, "hashtags") || null,
     strictOrder: b(f, "strictOrder"),
+    maxEpisodes: n(f, "maxEpisodes") && n(f, "maxEpisodes")! > 0 ? Math.floor(n(f, "maxEpisodes")!) : null,
     requireVariant: b(f, "requireVariant"),
     madeForKids: b(f, "madeForKids"),
     aiDisclosure: b(f, "aiDisclosure"),

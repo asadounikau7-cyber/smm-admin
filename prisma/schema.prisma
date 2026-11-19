@@ -229,6 +229,8 @@ model ReleaseRule {
   cta             String?
   hashtags        String?
   strictOrder     Boolean     @default(true)
+  /// Publish only the first N episodes of the series (teaser channel); null = all.
+  maxEpisodes     Int?
   /// Publish only the account's own edited version of each episode (block when there is none)
   requireVariant  Boolean     @default(false)
   madeForKids     Boolean     @default(false)

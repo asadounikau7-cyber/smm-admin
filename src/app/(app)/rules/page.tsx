@@ -33,7 +33,7 @@ export default async function RulesPage() {
                     <td>{KIND[r.assetKind]} · {r.language}</td>
                     <td><PlatformTag platform={r.account.platform} /> <span className="muted">@{r.account.handle} · {FORMAT_LABEL[r.format]}</span></td>
                     <td>{when} <span className="text-xs muted">{r.timezone}</span></td>
-                    <td>{r.strictOrder ? "строгий" : "—"}</td>
+                    <td>{r.strictOrder ? "строгий" : "—"}{r.maxEpisodes ? `, первые ${r.maxEpisodes}` : ""}</td>
                     <td><Link href={`/rules/${r.id}`} className="btn btn-sm">Изменить</Link></td>
                   </tr>
                 );
