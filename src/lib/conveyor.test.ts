@@ -7,7 +7,7 @@ import { DateTime } from "luxon";
 import { db } from "./db";
 import { encryptJson } from "./crypto";
 import { importRegistry, type Registry } from "./registry";
-import { DEFAULT_CONVEYOR, saveConveyorSettings, scheduleMain, scheduleTests } from "./conveyor";
+import { DEFAULT_CONVEYOR, saveConveyorSettings, scheduleMain, scheduleTests, testTimes } from "./conveyor";
 import { checkSeriesTests, markTestPassed, saveYtTestSettings } from "./seriesTest";
 
 const SLUGS = ["conv-a", "conv-b", "conv-c", "conv-d", "conv-e"];
@@ -141,5 +141,29 @@ describe("YouTube conveyor", () => {
     await scheduleMain(now);
     expect(await onUk()).toBe(3);
     expect(await db.channelQueueItem.count({ where: { seriesId: ids["conv-e"], accountId: ids.cv_m_us } })).toBe(3);
+  });
+
+  it("after the main slots change, episodes not yet picked up move to the new slots in the same order", async () => {
+    await saveConveyorSettings({ ...DEFAULT_CONVEYOR, enabled: true, mainSlots: ["09:00", "12:00"] });
+    await scheduleMain(now);
+    const items = await db.channelQueueItem.findMany({ where: { accountId: ids.cv_m_us, jobId: { not: null } }, orderBy: { position: "asc" } });
+    const jobs = await db.publicationJob.findMany({ where: { id: { in: items.map((i) => i.jobId!) } } });
+    const byId = new Map(jobs.map((j) => [j.id, j]));
+    const later = items.map((i) => byId.get(i.jobId!)!).filter((j) => j.scheduledAt.getTime() > now.getTime() + 7 * 3600_000);
+    expect(later.length).toBeGreaterThan(0);
+    for (const j of later) {
+      expect(j.status).toBe("QUEUED");
+      expect(["09:00", "12:00"]).toContain(local(j.scheduledAt).toFormat("HH:mm"));
+    }
+    const times = items.map((i) => byId.get(i.jobId!)!.scheduledAt.getTime());
+    expect([...times].sort((a, b) => a - b)).toEqual(times); // queue order kept
+  });
+
+  it("jitter never puts a test before 09:00", () => {
+    const day = local(now).startOf("day");
+    for (let i = 0; i < 50; i++) {
+      const [first] = testTimes({ id: `acc${i}` }, 0, day, { ...DEFAULT_CONVEYOR, testSlots: ["09:00"], jitterMin: 10 }, NY);
+      expect(local(first.at).toFormat("HH:mm") >= "09:00").toBe(true);
+    }
   });
 });

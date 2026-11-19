@@ -50,6 +50,8 @@ const CHANNEL_SHIFT_MIN = 50;
 /** A main-channel slot is taken if the channel already has a publication this close to it. */
 const SLOT_CLEARANCE_MIN = 90;
 const MAIN_DAYS_AHEAD = 2;
+/** Main jobs closer than this stay where they are when slots change (upload lead is 6 h). */
+const REPLAN_AFTER_MIN = 7 * 60;
 /** Minimum distance between two uploads on one test channel. */
 const TEST_GAP_MIN = 120;
 /** Days of tests planned ahead: today and tomorrow. */
@@ -117,7 +119,9 @@ async function testBacklog(geo: Geo, s: ConveyorSettings) {
 export function testTimes(account: Pick<SocialAccount, "id">, index: number, day: DateTime, s: ConveyorSettings, tz: string) {
   return s.testSlots.map((slot) => {
     const shift = index * CHANNEL_SHIFT_MIN + jitter(`${account.id}|${day.toISODate()}|${slot}`, s.jitterMin);
-    return { slot, at: new Date(at(day, slot, tz).getTime() + shift * 60_000) };
+    // Jitter never pulls a time before the window opens.
+    const t = Math.max(at(day, slot, tz).getTime() + shift * 60_000, at(day, WINDOW.from, tz).getTime());
+    return { slot, at: new Date(t) };
   });
 }
 
@@ -251,12 +255,32 @@ async function freeMainSlots(account: SocialAccount, s: ConveyorSettings, now: D
 }
 
 /** Worker: gives free main-channel slots to the episodes waiting in line, in order. */
+/**
+ * After the main slots change in Settings, episodes already given a time that is no longer a slot
+ * are handed back to the queue and placed again in order. Only jobs not yet picked up for upload
+ * (still QUEUED, beyond the upload lead) move; queueAt reuses the same job row.
+ */
+async function replanStale(account: SocialAccount, s: ConveyorSettings, now: Date) {
+  const items = await db.channelQueueItem.findMany({ where: { accountId: account.id, jobId: { not: null } }, select: { jobId: true } });
+  if (!items.length) return;
+  const tz = geoTz(account.geo as Geo);
+  const jobs = await db.publicationJob.findMany({
+    where: { id: { in: items.map((i) => i.jobId!) }, status: "QUEUED", externalId: null, scheduledAt: { gt: new Date(now.getTime() + REPLAN_AFTER_MIN * 60_000) } },
+    select: { id: true, scheduledAt: true },
+  });
+  const stale = jobs.filter((j) => !s.mainSlots.includes(DateTime.fromJSDate(j.scheduledAt, { zone: tz }).toFormat("HH:mm")));
+  if (!stale.length) return;
+  await db.publicationJob.updateMany({ where: { id: { in: stale.map((j) => j.id) }, status: "QUEUED" }, data: { status: "CANCELLED" } });
+  await db.channelQueueItem.updateMany({ where: { jobId: { in: stale.map((j) => j.id) } }, data: { jobId: null } });
+}
+
 export async function scheduleMain(now = new Date()) {
   const s = await getConveyorSettings();
   if (!s.enabled) return [];
   await backfillMain();
   const created: { account: string; episode: string; at: Date }[] = [];
   for (const account of await channels("MAIN")) {
+    await replanStale(account, s, now);
     const waiting = await db.channelQueueItem.findMany({
       where: { accountId: account.id, jobId: null },
       orderBy: { position: "asc" },
@@ -264,7 +288,14 @@ export async function scheduleMain(now = new Date()) {
       take: 20,
     });
     if (!waiting.length) continue;
-    const slots = await freeMainSlots(account, s, now);
+    // Episodes go out in queue order: nothing new lands before an episode already placed.
+    const placed = await db.channelQueueItem.findMany({ where: { accountId: account.id, jobId: { not: null } }, select: { jobId: true } });
+    const last = await db.publicationJob.aggregate({
+      where: { id: { in: placed.map((p) => p.jobId!) }, status: { not: "CANCELLED" } },
+      _max: { scheduledAt: true },
+    });
+    const after = last._max.scheduledAt?.getTime() ?? 0;
+    const slots = (await freeMainSlots(account, s, now)).filter((t) => t.getTime() > after);
     const tz = geoTz(account.geo as Geo);
     for (const item of waiting) {
       const slot = slots.shift();
