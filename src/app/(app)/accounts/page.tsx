@@ -38,7 +38,7 @@ export default async function AccountsPage({ searchParams }: { searchParams: Pro
                     <div className="text-xs muted">{a.displayName ?? a.externalId}{a.octoProfile ? ` · Octo: ${a.octoProfile.title}` : ""}</div>
                   </td>
                   <td colSpan={2}>
-                    <form action={updateAccountAction} className="flex gap-1">
+                    <form key={`${a.id}-${a.geo}-${a.role}-${a.language}`} action={updateAccountAction} className="flex gap-1">
                       <input type="hidden" name="id" value={a.id} />
                       <input name="language" defaultValue={a.language ?? ""} placeholder="en" className="input w-16" />
                       {a.platform === "YOUTUBE" && (
