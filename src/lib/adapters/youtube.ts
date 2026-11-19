@@ -185,10 +185,32 @@ export const youtube: PlatformAdapter = {
       return { status: "PUBLISHED", externalId: id, externalUrl: url, note };
     }
     // Private on YouTube, but the job wants it open. Wait for the slot (YouTube may open it itself via publishAt).
-    const publishAt = st.publishAt ? Date.parse(st.publishAt) : 0;
+    let publishAt = st.publishAt ? Date.parse(st.publishAt) : 0;
+    // The job was moved (conveyor order, «Перенести») but YouTube still holds another publish time:
+    // set it again; if YouTube keeps the old one, take the video off YouTube's schedule so it can't go
+    // out at the wrong time (at the slot the admin opens it or asks for Studio).
+    if (publishAt && Math.abs(publishAt - job.scheduledAt.getTime()) > 60_000 && job.scheduledAt.getTime() > Date.now() + 10 * 60_000) {
+      const mk = Boolean((job.meta as any)?.madeForKids);
+      const put = (at: string | null) =>
+        api(job.account, "videos?part=status", { method: "PUT", body: JSON.stringify({ id, status: { privacyStatus: "private", publishAt: at, selfDeclaredMadeForKids: mk } }) });
+      const read = async () => {
+        const { body: b } = await api(job.account, `videos?part=status&id=${id}`);
+        return b.items?.[0]?.status?.publishAt ? Date.parse(b.items[0].status.publishAt) : 0;
+      };
+      await put(job.scheduledAt.toISOString());
+      publishAt = await read();
+      if (publishAt && Math.abs(publishAt - job.scheduledAt.getTime()) > 60_000) {
+        await put(null);
+        publishAt = await read();
+        await audit("youtube.publishAt.cleared", "PublicationJob", job.id, null, { videoId: id });
+      }
+    }
     const dueAt = Math.max(job.scheduledAt.getTime(), publishAt ? publishAt + 10 * 60_000 : 0);
+    const when = publishAt
+      ? `YouTube откроет ${new Date(publishAt).toLocaleString("ru-RU", { timeZone: job.timezone, day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}`
+      : "без расписания на YouTube, откроется в слот";
     if (Date.now() < dueAt)
-      return { status: "PROCESSING", externalId: id, externalUrl: url, recheckInSec: recheck((dueAt - Date.now()) / 1000 + 30), note: "Загружено закрытым, откроется в назначенное время" };
+      return { status: "PROCESSING", externalId: id, externalUrl: url, recheckInSec: recheck((dueAt - Date.now()) / 1000 + 30), note: `Загружено закрытым, ${when}` };
     // The slot has passed and the video is still private: try opening it through the API once.
     if (!state.apiOpenTried) {
       const meta = (job.meta ?? {}) as { madeForKids?: boolean; aiDisclosure?: boolean };
