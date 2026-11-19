@@ -235,14 +235,15 @@ async function backfillMain() {
 }
 
 /** Free slots on a main channel for the next days, skipping times it already has a publication near. */
-async function freeMainSlots(account: SocialAccount, s: ConveyorSettings, now: Date) {
+async function freeMainSlots(account: SocialAccount, s: ConveyorSettings, now: Date, ignore = new Set<string>()) {
   const tz = geoTz(account.geo as Geo);
   const today = DateTime.fromJSDate(now, { zone: tz }).startOf("day");
   const until = today.plus({ days: MAIN_DAYS_AHEAD + 1 }).toJSDate();
-  const busy = await db.publicationJob.findMany({
+  const taken = await db.publicationJob.findMany({
     where: { accountId: account.id, status: { notIn: ["CANCELLED", "DRAFT", "BLOCKED"] }, scheduledAt: { gte: new Date(now.getTime() - SLOT_CLEARANCE_MIN * 60_000), lte: until } },
-    select: { scheduledAt: true },
+    select: { id: true, scheduledAt: true },
   });
+  const busy = taken.filter((b) => !ignore.has(b.id));
   const slots: Date[] = [];
   for (let d = 0; d <= MAIN_DAYS_AHEAD; d++)
     for (const time of [...s.mainSlots].sort()) {
@@ -256,22 +257,33 @@ async function freeMainSlots(account: SocialAccount, s: ConveyorSettings, now: D
 
 /** Worker: gives free main-channel slots to the episodes waiting in line, in order. */
 /**
- * After the main slots change in Settings, episodes already given a time that is no longer a slot
- * are handed back to the queue and placed again in order. Only jobs not yet picked up for upload
- * (still QUEUED, beyond the upload lead) move; queueAt reuses the same job row.
+ * Keeps a main channel's queue in order on the current slots. Jobs not yet picked up for upload
+ * (still QUEUED, beyond the upload lead) are "movable". If the movable and waiting episodes, taken in
+ * queue order, would not sit exactly on the earliest free slots after the last fixed episode (slots
+ * changed in Settings, or a series slipped ahead of an earlier one), the movable jobs are handed back
+ * to the queue and placed again. queueAt reuses the same job rows. Idempotent once in order.
  */
-async function replanStale(account: SocialAccount, s: ConveyorSettings, now: Date) {
-  const items = await db.channelQueueItem.findMany({ where: { accountId: account.id, jobId: { not: null } }, select: { jobId: true } });
-  if (!items.length) return;
-  const tz = geoTz(account.geo as Geo);
+async function replan(account: SocialAccount, s: ConveyorSettings, now: Date) {
+  const items = await db.channelQueueItem.findMany({ where: { accountId: account.id }, orderBy: { position: "asc" }, select: { jobId: true } });
   const jobs = await db.publicationJob.findMany({
-    where: { id: { in: items.map((i) => i.jobId!) }, status: "QUEUED", externalId: null, scheduledAt: { gt: new Date(now.getTime() + REPLAN_AFTER_MIN * 60_000) } },
-    select: { id: true, scheduledAt: true },
+    where: { id: { in: items.flatMap((i) => (i.jobId ? [i.jobId] : [])) } },
+    select: { id: true, status: true, externalId: true, scheduledAt: true },
   });
-  const stale = jobs.filter((j) => !s.mainSlots.includes(DateTime.fromJSDate(j.scheduledAt, { zone: tz }).toFormat("HH:mm")));
-  if (!stale.length) return;
-  await db.publicationJob.updateMany({ where: { id: { in: stale.map((j) => j.id) }, status: "QUEUED" }, data: { status: "CANCELLED" } });
-  await db.channelQueueItem.updateMany({ where: { jobId: { in: stale.map((j) => j.id) } }, data: { jobId: null } });
+  const byId = new Map(jobs.map((j) => [j.id, j]));
+  const limit = now.getTime() + REPLAN_AFTER_MIN * 60_000;
+  const movable = (id: string | null) => {
+    const j = id ? byId.get(id) : undefined;
+    return !!j && j.status === "QUEUED" && !j.externalId && j.scheduledAt.getTime() > limit;
+  };
+  const moving = items.filter((i) => movable(i.jobId)).map((i) => i.jobId!);
+  if (!moving.length) return;
+  const fixedMax = Math.max(0, ...jobs.filter((j) => j.status !== "CANCELLED" && !movable(j.id)).map((j) => j.scheduledAt.getTime()));
+  const slots = (await freeMainSlots(account, s, now, new Set(moving))).filter((t) => t.getTime() > fixedMax);
+  const seq = items.filter((i) => !i.jobId || movable(i.jobId));
+  const inOrder = seq.every((i, k) => !i.jobId || slots[k]?.getTime() === byId.get(i.jobId)!.scheduledAt.getTime());
+  if (inOrder) return;
+  await db.publicationJob.updateMany({ where: { id: { in: moving }, status: "QUEUED" }, data: { status: "CANCELLED" } });
+  await db.channelQueueItem.updateMany({ where: { jobId: { in: moving } }, data: { jobId: null } });
 }
 
 export async function scheduleMain(now = new Date()) {
@@ -280,7 +292,7 @@ export async function scheduleMain(now = new Date()) {
   await backfillMain();
   const created: { account: string; episode: string; at: Date }[] = [];
   for (const account of await channels("MAIN")) {
-    await replanStale(account, s, now);
+    await replan(account, s, now);
     const waiting = await db.channelQueueItem.findMany({
       where: { accountId: account.id, jobId: null },
       orderBy: { position: "asc" },

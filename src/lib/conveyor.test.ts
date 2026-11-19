@@ -157,6 +157,17 @@ describe("YouTube conveyor", () => {
     }
     const times = items.map((i) => byId.get(i.jobId!)!.scheduledAt.getTime());
     expect([...times].sort((a, b) => a - b)).toEqual(times); // queue order kept
+    // Out of order (a later episode moved ahead of an earlier one): put back in order.
+    const [first, second] = later;
+    await db.publicationJob.update({ where: { id: first.id }, data: { scheduledAt: new Date(second.scheduledAt.getTime() + 86_400_000) } });
+    await scheduleMain(now);
+    const again = await db.publicationJob.findMany({ where: { id: { in: items.map((i) => i.jobId!) } } });
+    const t2 = items.map((i) => again.find((j) => j.id === (i.jobId as string))!.scheduledAt.getTime());
+    expect([...t2].sort((a, b) => a - b)).toEqual(t2);
+    // Stable once in order.
+    await scheduleMain(now);
+    const t3 = (await db.publicationJob.findMany({ where: { id: { in: items.map((i) => i.jobId!) } } }));
+    expect(items.map((i) => t3.find((j) => j.id === i.jobId)!.scheduledAt.getTime())).toEqual(t2);
   });
 
   it("jitter never puts a test before 09:00", () => {
