@@ -5,7 +5,7 @@ import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import { requireOwner, requireUser } from "@/lib/auth";
 import { audit } from "@/lib/audit";
-import { getConveyorSettings, saveConveyorSettings } from "@/lib/conveyor";
+import { getConveyorSettings, saveConveyorSettings, WINDOW } from "@/lib/conveyor";
 import { getYtTestSettings, launchFirstEpisode, markTestFailed, markTestPassed, saveYtTestSettings, startSeriesTest } from "@/lib/seriesTest";
 
 const s = (f: FormData, k: string) => {
@@ -112,7 +112,7 @@ export async function resumeSeriesTestAction(f: FormData) {
 }
 
 const times = (v: string) =>
-  [...new Set(v.split(/[,\s]+/).filter((x) => /^\d{1,2}:\d{2}$/.test(x)).map((x) => x.padStart(5, "0")))].filter((x) => x >= "10:00" && x <= "21:00").sort();
+  [...new Set(v.split(/[,\s]+/).filter((x) => /^\d{1,2}:\d{2}$/.test(x)).map((x) => x.padStart(5, "0")))].filter((x) => x >= WINDOW.from && x <= WINDOW.to).sort();
 
 export async function saveConveyorSettingsAction(f: FormData) {
   const u = await requireOwner();
@@ -130,7 +130,7 @@ export async function saveConveyorSettingsAction(f: FormData) {
     mainEpisodes: num("mainEpisodes", 1, 50, cur.mainEpisodes),
     backlogDays: num("backlogDays", 1, 60, cur.backlogDays),
   };
-  if (!v.testSlots.length || !v.mainSlots.length) redirect("/settings?err=" + encodeURIComponent("Укажите слоты в формате 11:00, 15:00 в пределах 10:00–21:00"));
+  if (!v.testSlots.length || !v.mainSlots.length) redirect("/settings?err=" + encodeURIComponent(`Укажите слоты в формате 11:00, 15:00 в пределах ${WINDOW.from}–${WINDOW.to}`));
   await saveConveyorSettings(v);
   await audit("settings.ytConveyor", "Setting", "ytConveyor", u.id, v);
   revalidatePath("/settings");

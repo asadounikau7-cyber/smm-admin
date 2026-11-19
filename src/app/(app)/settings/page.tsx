@@ -115,7 +115,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
             <input name="backlogDays" type="number" min={1} defaultValue={conv.backlogDays} className="input" />
           </div>
         </div>
-        <p className="text-xs muted">Время слотов указывается в пределах 10:00–21:00. Второй тестовый канал того же гео сдвигается на 50 мин, чтобы каналы не грузили одновременно.</p>
+        <p className="text-xs muted">Время слотов указывается в пределах 09:00–23:00 по местному времени канала. Между загрузками на одном тестовом канале не меньше 2 часов. Второй тестовый канал того же гео сдвигается на 50 мин, чтобы каналы не грузили одновременно.</p>
         <div><button className="btn btn-primary" disabled={me.role !== "OWNER"}>Сохранить</button></div>
       </form>
 

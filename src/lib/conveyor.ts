@@ -51,7 +51,9 @@ const CHANNEL_SHIFT_MIN = 50;
 const SLOT_CLEARANCE_MIN = 90;
 const MAIN_DAYS_AHEAD = 2;
 /** Minimum distance between two uploads on one test channel. */
-const TEST_GAP_MIN = 150;
+const TEST_GAP_MIN = 120;
+/** Local hours a channel may publish in (slots and shifted test times stay inside). */
+export const WINDOW = { from: "09:00", to: "23:00" } as const;
 
 export async function getConveyorSettings(): Promise<ConveyorSettings> {
   const s = await db.setting.findUnique({ where: { key: "ytConveyor" } });
@@ -153,6 +155,8 @@ export async function scheduleTests(now = new Date()) {
       for (const t of testTimes(account, index, day, s, tz)) {
         const key = `${day.toISODate()}|${t.slot}`;
         if (used.has(key) || t.at.getTime() < now.getTime() + 5 * 60_000) continue;
+        // A channel shifted far enough to land past the window skips that slot.
+        if (t.at.getTime() > at(day, WINDOW.to, tz).getTime()) continue;
         if (near.some((j) => Math.abs(j.scheduledAt.getTime() - t.at.getTime()) < TEST_GAP_MIN * 60_000)) continue;
         // A series that can't be tested (no file) is set aside and the next one is tried.
         for (let tries = 0; tries < 5; tries++) {
