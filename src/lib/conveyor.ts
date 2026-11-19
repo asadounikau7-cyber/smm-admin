@@ -202,6 +202,24 @@ export async function enqueueMain(seriesId: string) {
   return placed;
 }
 
+/**
+ * Series that passed while a geo had no main channel go to that geo's first main channel once
+ * one appears. Only geos with a main channel and no queue entry for the series are touched.
+ */
+async function backfillMain() {
+  const geos = await conveyorGeos();
+  if (!geos.length) return;
+  const mains = await channels("MAIN");
+  const passed = await db.series.findMany({
+    where: { stage: "IN_WORK", bannedAt: null, allowedGeos: { hasSome: geos } },
+    select: { id: true, allowedGeos: true, queueItems: { select: { accountId: true } } },
+  });
+  for (const p of passed) {
+    const queuedOn = new Set(p.queueItems.map((q) => mains.find((m) => m.id === q.accountId)?.geo));
+    if (p.allowedGeos.some((g) => geos.includes(g as Geo) && !queuedOn.has(g))) await enqueueMain(p.id);
+  }
+}
+
 /** Free slots on a main channel for the next days, skipping times it already has a publication near. */
 async function freeMainSlots(account: SocialAccount, s: ConveyorSettings, now: Date) {
   const tz = geoTz(account.geo as Geo);
@@ -226,6 +244,7 @@ async function freeMainSlots(account: SocialAccount, s: ConveyorSettings, now: D
 export async function scheduleMain(now = new Date()) {
   const s = await getConveyorSettings();
   if (!s.enabled) return [];
+  await backfillMain();
   const created: { account: string; episode: string; at: Date }[] = [];
   for (const account of await channels("MAIN")) {
     const waiting = await db.channelQueueItem.findMany({

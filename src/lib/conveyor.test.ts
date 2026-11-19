@@ -132,4 +132,14 @@ describe("YouTube conveyor", () => {
     const created = await scheduleTests(DateTime.fromJSDate(now).plus({ days: 1 }).toJSDate());
     expect(created.map((c) => [c.account, c.series])).toEqual([["cv_m_uk", "Conv conv-e"]]);
   });
+
+  it("a series that passed before its geo had a main channel goes there once one is added", async () => {
+    await markTestPassed(ids["conv-e"], "ok", null, ["US", "UK"]); // UK has no main channel right now
+    const onUk = () => db.channelQueueItem.count({ where: { seriesId: ids["conv-e"], accountId: ids.cv_m_uk } });
+    expect(await onUk()).toBe(0);
+    await db.socialAccount.update({ where: { id: ids.cv_m_uk }, data: { role: "MAIN" } });
+    await scheduleMain(now);
+    expect(await onUk()).toBe(3);
+    expect(await db.channelQueueItem.count({ where: { seriesId: ids["conv-e"], accountId: ids.cv_m_us } })).toBe(3);
+  });
 });
