@@ -174,7 +174,7 @@ export const youtube: PlatformAdapter = {
     const st = v.status;
     if (st.uploadStatus === "rejected" || st.uploadStatus === "failed")
       throw new AdapterError("MODERATION", `YouTube: ${st.uploadStatus} ${st.rejectionReason ?? st.failureReason ?? ""}`);
-    const url = `https://www.youtube.com/watch?v=${id}`;
+    const url = `https://www.youtube.com/shorts/${id}`;
     const target = job.visibility.toLowerCase();
     const recheck = (sec: number) => Math.max(60, Math.min(900, Math.round(sec)));
     if (st.uploadStatus !== "processed")
@@ -284,7 +284,7 @@ async function afterUpload(job: JobCtx, videoId: string, scheduledNatively: bool
   return {
     status: "PROCESSING",
     externalId: videoId,
-    externalUrl: `https://www.youtube.com/watch?v=${videoId}`,
+    externalUrl: `https://www.youtube.com/shorts/${videoId}`,
     state: { videoId, scheduledNatively },
     recheckInSec: 120,
     note: scheduledNatively ? "Загружено, YouTube опубликует в назначенное время" : "Загружено",
