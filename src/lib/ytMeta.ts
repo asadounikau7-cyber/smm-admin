@@ -1,7 +1,7 @@
 import type { Episode, Series } from "@prisma/client";
 
 /** Version of the title/description format; jobs uploaded with an older one get their YouTube snippet refreshed. */
-export const YT_META_VERSION = 2;
+export const YT_META_VERSION = 3;
 
 const BASE_TAGS = ["short drama", "mini drama", "drama", "drama shorts", "shorts", "romance drama", "movie clips", "drama series"];
 const BASE_HASHTAGS = ["#shorts", "#drama", "#shortdrama", "#minidrama", "#dramashorts"];
@@ -23,7 +23,7 @@ export function youtubeMeta(series: Pick<Series, "title" | "synopsis" | "hashtag
   const hashtags = [...new Set([...BASE_HASHTAGS, ...own.map((h) => h.toLowerCase())])].join(" ");
   const next =
     ep.number === 1
-      ? "Part 2 is already on the channel. Subscribe so you don't miss what happens next!"
+      ? "Part 2 is coming next on the channel. Subscribe so you don't miss what happens next!"
       : `Missed the start? Part 1 is on the channel. Subscribe for a new drama every day!`;
   const description = [`${name} | ${part}`, series.synopsis ? clean(series.synopsis) : null, "", next, "", hashtags]
     .filter((l) => l !== null)
