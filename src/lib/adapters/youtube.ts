@@ -85,7 +85,9 @@ export async function refreshYoutubeMeta(limit = 10) {
       platform: "YOUTUBE",
       visibility: "PUBLIC",
       manualEdit: false,
-      status: { in: ["QUEUED", "SENT", "PROCESSING", "PUBLISHED", "MANUALLY_SCHEDULED"] },
+      // Only what isn't on YouTube yet: uploaded videos keep their title (Andrei, 2026-11-20).
+      status: "QUEUED",
+      externalId: null,
       createdAt: { gt: new Date(Date.now() - 60 * 86400_000) },
     },
     include: { account: true },
