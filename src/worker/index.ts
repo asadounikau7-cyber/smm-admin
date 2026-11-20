@@ -3,6 +3,7 @@ import { env, catalogConfigured } from "@/lib/env";
 import { syncCatalog, probePending } from "@/lib/sync";
 import { adapterFor } from "@/lib/adapters";
 import { igRefresh } from "@/lib/adapters/instagram";
+import { refreshYoutubeMeta } from "@/lib/adapters/youtube";
 import { claim, runCancel, runJob } from "@/lib/runner";
 import { flushEmails, notify } from "@/lib/notify";
 import { loadIntegrationKeys } from "@/lib/integrationKeys";
@@ -118,6 +119,7 @@ async function tick() {
     try {
       for (const t of await scheduleTests()) console.log(`[conveyor] test «${t.series}» on @${t.account} at ${t.at.toISOString()}`);
       for (const m of await scheduleMain()) console.log(`[conveyor] ${m.episode} on @${m.account} at ${m.at.toISOString()}`);
+      for (const t of await refreshYoutubeMeta()) console.log(`[youtube] new title: ${t}`);
     } catch (e) {
       console.error("[conveyor]", e);
     }

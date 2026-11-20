@@ -91,7 +91,7 @@ describe("YouTube series test", () => {
     expect(launch.accountId).toBe(m.id);
     expect(launch.visibility).toBe("PUBLIC");
     expect(launch.status).toBe("QUEUED");
-    expect(launch.title).toContain("S01E01");
+    expect(launch.title).toContain("Part 1");
 
     // A weekly rule on the main channel picks up from episode 2.
     await db.releaseRule.create({

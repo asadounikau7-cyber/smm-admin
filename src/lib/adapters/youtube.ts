@@ -5,6 +5,7 @@ import { decryptJson, encryptJson } from "../crypto";
 import { mediaStream } from "../mediaSource";
 import { notify, resolveNotification } from "../notify";
 import { audit } from "../audit";
+import { youtubeMeta, YT_META_VERSION } from "../ytMeta";
 import { AdapterError, classifyHttp, httpJson, type JobCtx, type Outcome, type PlatformAdapter } from "./types";
 
 export const YT_SCOPES = [
@@ -64,6 +65,61 @@ function statusBody(job: PublicationJob, scheduleNatively: boolean) {
   return s;
 }
 
+function snippetBody(job: PublicationJob) {
+  const tags = (job.meta as { tags?: unknown } | null)?.tags;
+  return {
+    title: job.title ?? "Video",
+    description: job.caption,
+    categoryId: "24",
+    ...(Array.isArray(tags) && tags.length ? { tags } : {}),
+  };
+}
+
+/**
+ * Brings public (main channel) uploads to the current title/description format: rewrites the job's
+ * text and, for a video already on YouTube, its snippet. A few per call to stay light on quota (50 units each).
+ */
+export async function refreshYoutubeMeta(limit = 10) {
+  const jobs = await db.publicationJob.findMany({
+    where: {
+      platform: "YOUTUBE",
+      visibility: "PUBLIC",
+      manualEdit: false,
+      status: { in: ["QUEUED", "SENT", "PROCESSING", "PUBLISHED", "MANUALLY_SCHEDULED"] },
+      createdAt: { gt: new Date(Date.now() - 60 * 86400_000) },
+    },
+    include: { account: true },
+    orderBy: { scheduledAt: "asc" },
+  });
+  const done: string[] = [];
+  for (const job of jobs) {
+    if (done.length >= limit) break;
+    const meta = (job.meta ?? {}) as Record<string, unknown>;
+    if (meta.ytMeta === YT_META_VERSION || typeof meta.episodeId !== "string") continue;
+    const ep = await db.episode.findUnique({ where: { id: meta.episodeId }, include: { series: true } });
+    if (!ep) continue;
+    const m = youtubeMeta(ep.series, ep);
+    const next = { ...job, title: m.title, caption: m.description, meta: { ...meta, tags: m.tags, ytMeta: YT_META_VERSION } };
+    let error: string | null = null;
+    if (job.externalId) {
+      try {
+        await api(job.account, "videos?part=snippet", { method: "PUT", body: JSON.stringify({ id: job.externalId, snippet: snippetBody(next) }) });
+      } catch (e) {
+        error = (e as Error).message.slice(0, 300);
+        console.error(`[youtube] snippet ${job.externalId}:`, error);
+        if (/quota/i.test(error)) break; // try again tomorrow
+      }
+    }
+    await db.publicationJob.update({
+      where: { id: job.id },
+      data: { title: m.title, caption: m.description, meta: { ...next.meta, ...(error ? { ytMetaError: error } : {}) } },
+    });
+    if (!error && job.externalId) await audit("youtube.snippet.set", "PublicationJob", job.id, null, { videoId: job.externalId, was: job.title, to: m.title });
+    done.push(m.title);
+  }
+  return done;
+}
+
 async function sessionStatus(sessionUrl: string, size: number) {
   const res = await fetch(sessionUrl, { method: "PUT", headers: { "content-range": `bytes */${size}`, "content-length": "0" } });
   if (res.status === 200 || res.status === 201) return { done: true as const, video: await res.json() };
@@ -116,7 +172,7 @@ export const youtube: PlatformAdapter = {
     if (!sessionUrl) {
       const token = await ytAccessToken(job.account);
       const meta = {
-        snippet: { title: job.title ?? "Video", description: job.caption, categoryId: "24" },
+        snippet: snippetBody(job),
         status: statusBody(job, scheduleNatively),
       };
       const res = await fetch("https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status", {

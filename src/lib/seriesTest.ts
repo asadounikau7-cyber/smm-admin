@@ -1,3 +1,4 @@
+import { youtubeMeta, YT_META_VERSION } from "./ytMeta";
 import { createHash } from "node:crypto";
 import type { AssetVersion, Episode, PostFormat, Series, SocialAccount, Visibility } from "@prisma/client";
 import { db } from "./db";
@@ -7,7 +8,6 @@ import { mediaUrl } from "./mediaSource";
 import { sourceFor } from "./variants";
 import { getOrCreatePlan } from "./planner";
 import { toLocal, weekStartFor } from "./time";
-import { renderCaption } from "./caption";
 import { VALIDATORS } from "./validators";
 import { ytVideoHealth } from "./adapters/youtube";
 import { notify, resolveNotification } from "./notify";
@@ -91,14 +91,7 @@ export async function queueAt(i: JobInput, at?: Date, tz: string = env().BASE_TI
   const now = new Date();
   const scheduledAt = at ?? new Date(now.getTime() + 30_000);
   const plan = await getOrCreatePlan(weekStartFor(scheduledAt, env().BASE_TIMEZONE));
-  const title = `${i.series.title} — ${epLabel(i.ep)}${i.ep.title ? ` · ${i.ep.title}` : ""}`.slice(0, 100);
-  const caption = renderCaption("{title} — S{season}E{episode}\n{hashtags}", {
-    title: i.series.title,
-    series: i.series.title,
-    season: i.ep.season,
-    episode: i.ep.number,
-    hashtags: i.series.hashtags,
-  });
+  const { title, description: caption, tags } = youtubeMeta(i.series, i.ep);
   const data = {
     accountId: i.account.id,
     assetVersionId: file.version.id,
@@ -112,7 +105,7 @@ export async function queueAt(i: JobInput, at?: Date, tz: string = env().BASE_TI
     deadlineAt: new Date(scheduledAt.getTime() + 6 * 3600_000),
     caption,
     title,
-    meta: { ...i.meta, seriesId: i.series.id, episodeId: i.ep.id, assetId: file.asset.id, variantId: file.variant?.id ?? null, variantCode: file.variant?.code ?? null },
+    meta: { ...i.meta, tags, ytMeta: YT_META_VERSION, seriesId: i.series.id, episodeId: i.ep.id, assetId: file.asset.id, variantId: file.variant?.id ?? null, variantCode: file.variant?.code ?? null },
     externalId: null,
     externalUrl: null,
     errorCode: null,
