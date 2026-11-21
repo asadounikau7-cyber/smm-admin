@@ -114,11 +114,11 @@ describe("YouTube conveyor", () => {
     const created = await scheduleMain(now);
     const us = created.filter((c) => c.account === "cv_m_us");
     const uk = created.filter((c) => c.account === "cv_m_uk");
-    // US: conv-a's three episodes, then conv-b's; first free slot is 14:00 New York.
+    // US: conv-a's three episodes; first free slot is 14:00 New York.
     expect(us[0].episode).toBe("Conv conv-a S1E1");
     expect(local(us[0].at).toFormat("HH:mm")).toBe("14:00");
-    expect(us.slice(0, 4).map((c) => c.episode)).toEqual(["Conv conv-a S1E1", "Conv conv-a S1E2", "Conv conv-a S1E3", "Conv conv-b S1E1"]);
-    // UK gets only conv-b (conv-a is blocked there), at London times.
+    expect(us.map((c) => c.episode)).toEqual(["Conv conv-a S1E1", "Conv conv-a S1E2", "Conv conv-a S1E3"]);
+    // conv-b goes to ONE main channel, the less busy UK one, at London times; no copy on the US channel.
     expect(uk.map((c) => c.episode)).toEqual(["Conv conv-b S1E1", "Conv conv-b S1E2", "Conv conv-b S1E3"]);
     expect(local(uk[0].at, "Europe/London").toFormat("HH:mm")).toBe("14:00");
     expect(await scheduleMain(now)).toHaveLength(0); // remaining slots already given out
@@ -133,14 +133,16 @@ describe("YouTube conveyor", () => {
     expect(created.map((c) => [c.account, c.series])).toEqual([["cv_m_uk", "Conv conv-e"]]);
   });
 
-  it("a series that passed before its geo had a main channel goes there once one is added", async () => {
-    await markTestPassed(ids["conv-e"], "ok", null, ["US", "UK"]); // UK has no main channel right now
-    const onUk = () => db.channelQueueItem.count({ where: { seriesId: ids["conv-e"], accountId: ids.cv_m_uk } });
-    expect(await onUk()).toBe(0);
+  it("a passed series that no main channel could take goes to one once a fitting channel appears", async () => {
+    await db.socialAccount.update({ where: { id: ids.cv_m_uk }, data: { role: "TEST" } });
+    await markTestPassed(ids["conv-e"], "ok", null, ["UK"]); // only the UK, which has no main channel right now
+    const items = () => db.channelQueueItem.findMany({ where: { seriesId: ids["conv-e"] } });
+    expect(await items()).toHaveLength(0);
     await db.socialAccount.update({ where: { id: ids.cv_m_uk }, data: { role: "MAIN" } });
     await scheduleMain(now);
-    expect(await onUk()).toBe(3);
-    expect(await db.channelQueueItem.count({ where: { seriesId: ids["conv-e"], accountId: ids.cv_m_us } })).toBe(3);
+    const after = await items();
+    expect(after).toHaveLength(3);
+    expect(new Set(after.map((i) => i.accountId))).toEqual(new Set([ids.cv_m_uk]));
   });
 
   it("after the main slots change, episodes not yet picked up move to the new slots in the same order", async () => {
@@ -193,14 +195,18 @@ describe("YouTube conveyor", () => {
     expect([...t].sort((a, b) => a - b)).toEqual(t);
   });
 
-  it("a new main channel in the geo takes whole waiting series off the busy one", async () => {
+  it("a new main channel takes whole waiting series off the busy one", async () => {
     await db.channelQueueItem.deleteMany({ where: { accountId: ids.cv_m_us } });
     let pos = 1;
     for (const slug of SLUGS) {
       const eps = await db.episode.findMany({ where: { seriesId: ids[slug] }, orderBy: { number: "asc" }, take: 3 });
       for (const ep of eps) await db.channelQueueItem.create({ data: { accountId: ids.cv_m_us, seriesId: ids[slug], episodeId: ep.id, position: pos++ } });
     }
+    // Only the two US main channels take part here.
+    await db.channelQueueItem.deleteMany({ where: { accountId: ids.cv_m_uk } });
+    await db.socialAccount.update({ where: { id: ids.cv_m_uk }, data: { role: "TEST" } });
     ids.cv_m_us2 = (await db.socialAccount.create({ data: { platform: "YOUTUBE", externalId: "cv_m_us2", handle: "cv_m_us2", language: "en", credentials: creds(), geo: "US", role: "MAIN" } })).id;
+    await db.series.updateMany({ where: { id: { in: SLUGS.map((x) => ids[x]) } }, data: { allowedGeos: ["US", "UK"] } });
     expect(await rebalanceMain()).toBe(6);
     const a = await db.channelQueueItem.findMany({ where: { accountId: ids.cv_m_us }, orderBy: { position: "asc" } });
     const b = await db.channelQueueItem.findMany({ where: { accountId: ids.cv_m_us2 }, orderBy: { position: "asc" } });

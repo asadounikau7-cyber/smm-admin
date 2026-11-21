@@ -30,7 +30,7 @@ export default async function YouTubeConveyorPage() {
     (await db.publicationJob.findMany({ where: { id: { in: items.map((i) => i.jobId).filter(Boolean) as string[] } } })).map((j) => [j.id, j]),
   );
   const eps = new Map((await db.episode.findMany({ where: { id: { in: items.map((i) => i.episodeId) } } })).map((e) => [e.id, e]));
-  const backlog = Object.fromEntries(await Promise.all((Object.keys(GEOS) as (keyof typeof GEOS)[]).map(async (g) => [g, await backlogDays(g, s)] as const)));
+  const backlog = await backlogDays(null, s);
   const fmt = (d: Date, tz: string) => DateTime.fromJSDate(d, { zone: tz }).setLocale("ru").toFormat("ccc d LLL, HH:mm");
 
   return (
@@ -137,10 +137,9 @@ export default async function YouTubeConveyorPage() {
               const tz = GEOS[m.geo as keyof typeof GEOS].tz;
               const mine = items.filter((i) => i.accountId === m.id);
               const open = mine.filter((i) => !i.jobId || !["PUBLISHED", "CANCELLED"].includes(jobs.get(i.jobId)?.status ?? ""));
-              const b = backlog[m.geo as string];
               return (
                 <div key={m.id} className="card p-4 text-sm">
-                  <div className="mb-2 font-medium">@{m.handle} <span className="muted text-xs">{m.geo} · ждут {mine.filter((i) => !i.jobId).length} серий{Number.isFinite(b) ? `, очередь гео ≈ ${b.toFixed(1)} дн.` : ""}</span></div>
+                  <div className="mb-2 font-medium">@{m.handle} <span className="muted text-xs">{m.geo} · ждут {mine.filter((i) => !i.jobId).length} серий{Number.isFinite(backlog) ? `, общая очередь ≈ ${backlog.toFixed(1)} дн.` : ""}</span></div>
                   {open.length === 0 ? (
                     <div className="muted text-xs">Очередь пуста.</div>
                   ) : (

@@ -96,23 +96,20 @@ function jitter(key: string, maxMin: number) {
   return (n % (2 * maxMin + 1)) - maxMin;
 }
 
-/** Main-channel slots booked ahead, in days, for a geo. */
-export async function backlogDays(geo: Geo, s: ConveyorSettings) {
-  const mains = await channels("MAIN", geo);
+/** Main-channel slots booked ahead, in days: for one geo, or (no geo) for all main channels together. */
+export async function backlogDays(geo: Geo | null, s: ConveyorSettings) {
+  const mains = await channels("MAIN", geo ?? undefined);
   if (!mains.length || !s.mainSlots.length) return Infinity;
   const pending = await db.channelQueueItem.count({ where: { accountId: { in: mains.map((m) => m.id) }, jobId: null } });
   return pending / (mains.length * s.mainSlots.length);
 }
 
 /**
- * Backlog that throttles tests on a geo's test channels. A test result covers every geo
- * (YouTube's region data decides where the series may go), so test channels of a geo with
- * no main channel yet keep testing for the geos that have one.
+ * Backlog that throttles tests. A Content ID verdict holds for every geo and each passed series goes
+ * to one main channel of the whole pool, so tests follow the backlog of all main channels together.
  */
 async function testBacklog(_geo: Geo, s: ConveyorSettings) {
-  // Tests feed every geo, so they keep going while any geo with a main channel is short of content.
-  const all = await Promise.all((await conveyorGeos()).map((g) => backlogDays(g, s)));
-  return all.length ? Math.min(...all) : Infinity;
+  return backlogDays(null, s);
 }
 
 // ---------- tests ----------
@@ -214,81 +211,74 @@ export async function scheduleTests(now = new Date()) {
 
 // ---------- main channels ----------
 
-/** Puts the first N episodes of a passed series in line on the least busy main channel of each allowed geo. */
+/**
+ * Puts the first N episodes of a passed series in line on ONE main channel: the least busy of all
+ * main channels whose geo the series may play in. A series never goes to two main channels.
+ */
 export async function enqueueMain(seriesId: string) {
   const s = await getConveyorSettings();
   const series = await db.series.findUniqueOrThrow({ where: { id: seriesId }, include: { episodes: { orderBy: [{ season: "asc" }, { number: "asc" }] } } });
   const eps = series.episodes.slice(0, s.mainEpisodes);
-  const placed: SocialAccount[] = [];
-  for (const geo of series.allowedGeos.filter(isGeo)) {
-    const mains = await channels("MAIN", geo);
-    if (!mains.length) continue;
-    // Already lined up on one of this geo's channels: leave it there.
-    if (await db.channelQueueItem.findFirst({ where: { seriesId, accountId: { in: mains.map((m) => m.id) } } })) continue;
-    const load = await Promise.all(mains.map(async (m) => ({ m, n: await db.channelQueueItem.count({ where: { accountId: m.id, jobId: null } }) })));
-    const target = load.sort((a, b) => a.n - b.n)[0].m;
-    const last = await db.channelQueueItem.findFirst({ where: { accountId: target.id }, orderBy: { position: "desc" } });
-    let pos = (last?.position ?? 0) + 1;
-    for (const ep of eps)
-      await db.channelQueueItem.upsert({
-        where: { accountId_episodeId: { accountId: target.id, episodeId: ep.id } },
-        update: {},
-        create: { accountId: target.id, seriesId, episodeId: ep.id, position: pos++ },
-      });
-    placed.push(target);
-  }
-  return placed;
+  const mains = (await channels("MAIN")).filter((m) => series.allowedGeos.includes(m.geo as string));
+  if (!mains.length) return [];
+  // Already lined up on a main channel: leave it there.
+  if (await db.channelQueueItem.findFirst({ where: { seriesId, account: { role: "MAIN" } } })) return [];
+  const load = await Promise.all(mains.map(async (m) => ({ m, n: await db.channelQueueItem.count({ where: { accountId: m.id, jobId: null } }) })));
+  const target = load.sort((x, y) => x.n - y.n)[0].m;
+  const last = await db.channelQueueItem.findFirst({ where: { accountId: target.id }, orderBy: { position: "desc" } });
+  let pos = (last?.position ?? 0) + 1;
+  for (const ep of eps)
+    await db.channelQueueItem.upsert({
+      where: { accountId_episodeId: { accountId: target.id, episodeId: ep.id } },
+      update: {},
+      create: { accountId: target.id, seriesId, episodeId: ep.id, position: pos++ },
+    });
+  return [target];
 }
 
 /**
- * Series that passed while a geo had no main channel go to that geo's first main channel once
- * one appears. Only geos with a main channel and no queue entry for the series are touched.
- */
-/**
- * Main channels of one geo share the line: when one has far more waiting than another (e.g. a channel
- * was just added), whole series that haven't been given a time yet move from the end of the busiest
- * line to the end of the least busy one. Episodes of a series always stay together and in order.
+ * All main channels share one line: when one has far more waiting than another (e.g. a channel was
+ * just added), whole series that haven't been given a time yet move from the end of the busiest line
+ * to the end of the least busy channel they may play on. Episodes of a series stay together, in order.
  */
 export async function rebalanceMain() {
+  const mains = await channels("MAIN");
+  if (mains.length < 2) return 0;
   let moved = 0;
-  for (const geo of await conveyorGeos()) {
-    const mains = await channels("MAIN", geo);
-    if (mains.length < 2) continue;
-    for (let guard = 0; guard < 200; guard++) {
-      const load = await Promise.all(mains.map(async (m) => ({ m, n: await db.channelQueueItem.count({ where: { accountId: m.id, jobId: null } }) })));
-      load.sort((a, b) => b.n - a.n);
-      const [max, min] = [load[0], load[load.length - 1]];
-      const items = await db.channelQueueItem.findMany({ where: { accountId: max.m.id }, orderBy: { position: "desc" } });
-      const last = items[0];
-      if (!last) break;
-      const group = items.filter((i) => i.seriesId === last.seriesId);
-      // Only a series nothing of which is on its way yet, and only if it narrows the gap.
-      if (group.some((i) => i.jobId) || max.n - min.n <= group.length) break;
-      const tail = await db.channelQueueItem.findFirst({ where: { accountId: min.m.id }, orderBy: { position: "desc" } });
+  for (let guard = 0; guard < 300; guard++) {
+    const load = await Promise.all(mains.map(async (m) => ({ m, n: await db.channelQueueItem.count({ where: { accountId: m.id, jobId: null } }) })));
+    let didMove = false;
+    for (const src of [...load].sort((a, b) => b.n - a.n)) {
+      const last = await db.channelQueueItem.findFirst({ where: { accountId: src.m.id }, orderBy: { position: "desc" }, include: { series: { select: { allowedGeos: true } } } });
+      if (!last) continue;
+      const group = await db.channelQueueItem.findMany({ where: { accountId: src.m.id, seriesId: last.seriesId }, orderBy: { position: "asc" } });
+      if (group.some((i) => i.jobId)) continue;
+      const dest = load.filter((l) => l.m.id !== src.m.id && last.series.allowedGeos.includes(l.m.geo as string)).sort((a, b) => a.n - b.n)[0];
+      if (!dest || src.n - dest.n <= group.length) continue;
+      const tail = await db.channelQueueItem.findFirst({ where: { accountId: dest.m.id }, orderBy: { position: "desc" } });
       let pos = (tail?.position ?? 0) + 1;
-      for (const i of [...group].sort((a, b) => a.position - b.position)) {
-        await db.channelQueueItem.update({ where: { id: i.id }, data: { accountId: min.m.id, position: pos++ } });
-      }
+      for (const i of group) await db.channelQueueItem.update({ where: { id: i.id }, data: { accountId: dest.m.id, position: pos++ } });
       moved += group.length;
+      didMove = true;
+      break;
     }
+    if (!didMove) break;
   }
   return moved;
 }
 
+/** Passed series that aren't lined up on any main channel yet (e.g. no channel fit when they passed). */
 async function backfillMain() {
-  const geos = await conveyorGeos();
-  if (!geos.length) return;
   const mains = await channels("MAIN");
+  if (!mains.length) return;
+  const geos = [...new Set(mains.map((m) => m.geo as string))];
   const passed = await db.series.findMany({
-    where: { stage: "IN_WORK", bannedAt: null, allowedGeos: { hasSome: geos } },
-    select: { id: true, allowedGeos: true, queueItems: { select: { accountId: true } } },
-    // Oldest passes first, so a new geo starts with the series that already proved themselves longest ago.
+    where: { stage: "IN_WORK", bannedAt: null, allowedGeos: { hasSome: geos }, queueItems: { none: { account: { role: "MAIN" } } } },
+    select: { id: true },
+    // Oldest passes first.
     orderBy: { inWorkAt: "asc" },
   });
-  for (const p of passed) {
-    const queuedOn = new Set(p.queueItems.map((q) => mains.find((m) => m.id === q.accountId)?.geo));
-    if (p.allowedGeos.some((g) => geos.includes(g as Geo) && !queuedOn.has(g))) await enqueueMain(p.id);
-  }
+  for (const p of passed) await enqueueMain(p.id);
 }
 
 /** Free slots on a main channel for the next days, skipping times it already has a publication near. */
