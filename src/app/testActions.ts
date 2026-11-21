@@ -129,6 +129,7 @@ export async function saveConveyorSettingsAction(f: FormData) {
     mainSlots: times(s(f, "mainSlots")),
     mainEpisodes: num("mainEpisodes", 1, 50, cur.mainEpisodes),
     backlogDays: num("backlogDays", 1, 60, cur.backlogDays),
+    channelVersions: f.get("channelVersions") === "on",
   };
   if (!v.testSlots.length || !v.mainSlots.length) redirect("/settings?err=" + encodeURIComponent(`Укажите слоты в формате 11:00, 15:00 в пределах ${WINDOW.from}–${WINDOW.to}`));
   await saveConveyorSettings(v);

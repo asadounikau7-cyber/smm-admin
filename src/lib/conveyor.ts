@@ -7,6 +7,7 @@ import { queueAt, startSeriesTest } from "./seriesTest";
 import { adapterFor } from "./adapters";
 import { env } from "./env";
 import { toLocal } from "./time";
+import { createVariants } from "./variants";
 
 /**
  * YouTube conveyor: test channels check new series every day at spread-out local times; series that pass
@@ -36,6 +37,8 @@ export type ConveyorSettings = {
   mainEpisodes: number;
   /** Pause new tests in a geo when its main channels are booked further ahead than this */
   backlogDays: number;
+  /** Uniqueization: main channels with an edit template publish their own rendered version */
+  channelVersions: boolean;
 };
 
 export const DEFAULT_CONVEYOR: ConveyorSettings = {
@@ -46,6 +49,7 @@ export const DEFAULT_CONVEYOR: ConveyorSettings = {
   mainSlots: ["10:00", "14:00", "19:00"],
   mainEpisodes: 3,
   backlogDays: 7,
+  channelVersions: false,
 };
 
 /** Test channels of one geo are shifted against each other so two never upload within half an hour. */
@@ -319,6 +323,59 @@ export async function dropMainDuplicates() {
   return dropped;
 }
 
+/**
+ * Uniqueization: a main channel with its own edit template publishes its own version of each episode.
+ * A version is made (and rendered by the agent or the server) as soon as the episode is in the
+ * channel's line; once it is ready, a planned job that hasn't started uploading switches to it.
+ * Until then the job keeps the original, so a slow render never holds up a slot.
+ */
+export async function prepareChannelVersions() {
+  const mains = (await channels("MAIN")).filter((m) => m.editTemplateId);
+  let made = 0;
+  let attached = 0;
+  for (const m of mains) {
+    const items = await db.channelQueueItem.findMany({ where: { accountId: m.id }, include: { series: { select: { id: true } } } });
+    const jobs = new Map(
+      (await db.publicationJob.findMany({ where: { id: { in: items.map((i) => i.jobId).filter(Boolean) as string[] } } })).map((j) => [j.id, j]),
+    );
+    const open = items.filter((i) => {
+      const j = i.jobId ? jobs.get(i.jobId) : null;
+      return !j || (j.status === "QUEUED" && !j.externalId);
+    });
+    const have = new Set((await db.videoVariant.findMany({ where: { accountId: m.id, episodeId: { in: open.map((i) => i.episodeId) } }, select: { episodeId: true } })).map((v) => v.episodeId));
+    const missing = open.filter((i) => !have.has(i.episodeId));
+    const bySeries = new Map<string, string[]>();
+    for (const i of missing) {
+      const ep = await db.episode.findUnique({ where: { id: i.episodeId }, select: { season: true, number: true } });
+      if (ep) bySeries.set(i.seriesId, [...(bySeries.get(i.seriesId) ?? []), `${ep.season}:${ep.number}`]);
+    }
+    for (const [seriesId, episodes] of bySeries) {
+      try {
+        made += (await createVariants({ templateId: m.editTemplateId, seriesId, episodes, accountIds: [m.id], pool: 0 })).created;
+      } catch (e) {
+        console.warn(`[conveyor] versions for @${m.handle}: ${(e as Error).message}`);
+      }
+    }
+    // Ready versions replace the original on jobs that haven't started uploading.
+    for (const i of open) {
+      const j = i.jobId ? jobs.get(i.jobId) : null;
+      if (!j) continue;
+      const v = await db.videoVariant.findUnique({
+        where: { episodeId_accountId: { episodeId: i.episodeId, accountId: m.id } },
+        include: { output: { include: { versions: { where: { isCurrent: true } } } } },
+      });
+      const out = v?.status === "READY" ? v.output?.versions[0] : null;
+      if (!v || !out || j.assetVersionId === out.id) continue;
+      await db.publicationJob.update({
+        where: { id: j.id },
+        data: { assetVersionId: out.id, meta: { ...((j.meta ?? {}) as object), variantId: v.id, variantCode: v.code, assetId: v.output!.id } },
+      });
+      attached++;
+    }
+  }
+  return { made, attached };
+}
+
 /** Passed series that aren't lined up on any main channel yet (e.g. no channel fit when they passed). */
 async function backfillMain() {
   const mains = await channels("MAIN");
@@ -367,6 +424,8 @@ export async function scheduleMain(now = new Date()) {
   await backfillMain();
   for (const t of await dropMainDuplicates()) console.log(`[conveyor] duplicate dropped: ${t}`);
   await rebalanceMain();
+  const pv = s.channelVersions ? await prepareChannelVersions() : { made: 0, attached: 0 };
+  if (pv.made || pv.attached) console.log(`[conveyor] channel versions: ${pv.made} new, ${pv.attached} attached`);
   const created: { account: string; episode: string; at: Date }[] = [];
   for (const account of await channels("MAIN")) {
     const tz = geoTz(account.geo as Geo);

@@ -7,7 +7,7 @@ import { DateTime } from "luxon";
 import { db } from "./db";
 import { encryptJson } from "./crypto";
 import { importRegistry, type Registry } from "./registry";
-import { DEFAULT_CONVEYOR, dropMainDuplicates, rebalanceMain, releaseTestsOnMainChannels, saveConveyorSettings, scheduleMain, scheduleTests, testTimes } from "./conveyor";
+import { DEFAULT_CONVEYOR, dropMainDuplicates, prepareChannelVersions, rebalanceMain, releaseTestsOnMainChannels, saveConveyorSettings, scheduleMain, scheduleTests, testTimes } from "./conveyor";
 import { checkSeriesTests, markTestPassed, saveYtTestSettings } from "./seriesTest";
 
 const SLUGS = ["conv-a", "conv-b", "conv-c", "conv-d", "conv-e"];
@@ -246,6 +246,21 @@ describe("YouTube conveyor", () => {
     expect(await dropMainDuplicates()).toEqual(["Conv conv-c"]);
     expect(await db.channelQueueItem.count({ where: { seriesId: ids["conv-c"] } })).toBe(0);
     await db.socialAccount.update({ where: { id: ids.cv_m_uk }, data: { role: "TEST" } });
+  });
+
+  it("a main channel with a template gets its own version of every episode in its line", async () => {
+    const tpl = await db.editTemplate.create({ data: { name: "conv-tpl", recipe: { preset: "warm", zoom: 1.05 }, variation: { zoom: [1.04, 1.06] } } });
+    await db.socialAccount.update({ where: { id: ids.cv_m_us }, data: { editTemplateId: tpl.id } });
+    const line = await db.channelQueueItem.findMany({ where: { accountId: ids.cv_m_us } });
+    expect(line.length).toBeGreaterThan(0);
+    const r = await prepareChannelVersions();
+    expect(r.made).toBeGreaterThan(0);
+    const vs = await db.videoVariant.findMany({ where: { accountId: ids.cv_m_us } });
+    expect(vs.every((v) => v.templateId === tpl.id && v.status === "PENDING")).toBe(true);
+    expect((await prepareChannelVersions()).made).toBe(0); // one version per episode and channel
+    await db.videoVariant.deleteMany({ where: { accountId: ids.cv_m_us } });
+    await db.socialAccount.update({ where: { id: ids.cv_m_us }, data: { editTemplateId: null } });
+    await db.editTemplate.delete({ where: { id: tpl.id } });
   });
 
   it("jitter never puts a test before 09:00", () => {

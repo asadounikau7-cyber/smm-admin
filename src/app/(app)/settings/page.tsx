@@ -93,6 +93,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
         </p>
         <label className="flex items-center gap-2"><input type="checkbox" name="enabled" defaultChecked={conv.enabled} /> Конвейер включён</label>
         <label className="flex items-center gap-2"><input type="checkbox" name="autoPick" defaultChecked={conv.autoPick} /> Если очередь на тест пуста, брать следующие непроверенные сериалы из каталога</label>
+        <label className="flex items-center gap-2"><input type="checkbox" name="channelVersions" defaultChecked={conv.channelVersions} /> Уникализация: боевые каналы с шаблоном публикуют свою версию серии (рендер агентом или сервером; пока версия не готова, уходит оригинал)</label>
         <div className="grid gap-3 md:grid-cols-2">
           <div>
             <label className="label">Слоты тестовых каналов (сколько слотов, столько сериалов в день на канал)</label>
