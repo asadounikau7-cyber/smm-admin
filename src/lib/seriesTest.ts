@@ -282,3 +282,42 @@ async function checkOne(s: Series, settings: YtTestSettings) {
     return markTestPassed(s.id, `Прошёл: ${settings.waitMin} мин на @${job.account.handle}${partial || " без блокировок"}`, null, geos);
   await setNote(health.state === "pending" ? health.note : `Чисто${partial}, наблюдаем ещё ${left} мин`, { testLiveAt: liveAt, testCheckedAt: new Date(now) });
 }
+
+/**
+ * YouTube can put an age restriction on a video some time after the test passed. Series that passed
+ * in the last two days are looked at again: an 18+ test video takes the series off the main channels'
+ * line (episodes not uploaded yet) and marks it failed.
+ */
+export async function recheckPassedSeries(now = new Date()) {
+  const recent = await db.series.findMany({
+    where: { stage: "IN_WORK", inWorkAt: { gte: new Date(now.getTime() - 48 * 3600_000) }, testJobId: { not: null } },
+  });
+  const out: string[] = [];
+  for (const s of recent) {
+    const job = await db.publicationJob.findUnique({ where: { id: s.testJobId! }, include: { account: true } });
+    if (!job?.externalId || job.account.platform !== "YOUTUBE") continue;
+    let health;
+    try {
+      health = await ytVideoHealth(job.account, job.externalId, job.visibility.toLowerCase());
+    } catch (e) {
+      console.warn(`[series-test] recheck ${s.slug}: ${(e as Error).message}`);
+      continue;
+    }
+    if (health.state !== "bad" || !health.note.startsWith("18+")) continue;
+    const items = await db.channelQueueItem.findMany({ where: { seriesId: s.id }, include: { account: true } });
+    const kept: string[] = [];
+    for (const i of items) {
+      const j = i.jobId ? await db.publicationJob.findUnique({ where: { id: i.jobId } }) : null;
+      if (j && (j.externalId || j.status !== "QUEUED")) {
+        kept.push(`@${i.account.handle}`);
+        continue;
+      }
+      if (j) await db.publicationJob.update({ where: { id: j.id }, data: { status: "CANCELLED" } });
+      await db.channelQueueItem.delete({ where: { id: i.id } });
+    }
+    const note = `${health.note}; снят с очереди боевых${kept.length ? `, уже загружено на ${[...new Set(kept)].join(", ")}` : ""}`;
+    await markTestFailed(s.id, note);
+    out.push(`${s.title}: ${note}`);
+  }
+  return out;
+}

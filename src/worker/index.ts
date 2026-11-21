@@ -7,7 +7,7 @@ import { refreshYoutubeMeta } from "@/lib/adapters/youtube";
 import { claim, runCancel, runJob } from "@/lib/runner";
 import { flushEmails, notify } from "@/lib/notify";
 import { loadIntegrationKeys } from "@/lib/integrationKeys";
-import { checkSeriesTests } from "@/lib/seriesTest";
+import { checkSeriesTests, recheckPassedSeries } from "@/lib/seriesTest";
 import { scheduleMain, scheduleTests } from "@/lib/conveyor";
 import { markSpanishSeries } from "@/lib/language";
 import { agentRenderOnline, claimRender, getRenderMode, renderOnServer } from "@/lib/renderJobs";
@@ -106,6 +106,8 @@ async function maybeRender() {
     .finally(() => (rendering = null));
 }
 
+let lastRecheck = 0;
+
 async function tick() {
   await heartbeat();
   await loadIntegrationKeys();
@@ -114,6 +116,10 @@ async function tick() {
   await dispatchDue();
   await followUps();
   await checkSeriesTests();
+  if (Date.now() - lastRecheck > 30 * 60_000) {
+    lastRecheck = Date.now();
+    for (const r of await recheckPassedSeries().catch((e) => (console.error("[series-test] recheck", e), [] as string[]))) console.log(`[series-test] ${r}`);
+  }
   if (Date.now() - lastConveyor > 2 * 60_000) {
     lastConveyor = Date.now();
     try {

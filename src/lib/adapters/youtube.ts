@@ -451,6 +451,8 @@ export async function ytVideoHealth(account: SocialAccount, videoId: string, exp
   const rr = v.contentDetails?.regionRestriction;
   if (st.uploadStatus !== "processed") return { state: "pending", note: "YouTube ещё обрабатывает ролик" };
   if (expectedPrivacy !== "private" && st.privacyStatus === "private") return { state: "bad", note: "YouTube сделал ролик закрытым" };
+  if (v.contentDetails?.contentRating?.ytRating === "ytAgeRestricted")
+    return { state: "bad", note: "18+: YouTube поставил возрастное ограничение (такие Shorts почти не показываются)" };
   if (rr?.blocked?.length)
     return { state: "bad", note: `Заблокирован в ${rr.blocked.length} странах (Content ID): ${rr.blocked.slice(0, 8).join(", ")}${rr.blocked.length > 8 ? "…" : ""}`, region: { blocked: rr.blocked } };
   if (rr?.allowed) return { state: "bad", note: `Доступен только в ${rr.allowed.length} странах (Content ID): ${rr.allowed.slice(0, 8).join(", ")}`, region: { allowed: rr.allowed } };

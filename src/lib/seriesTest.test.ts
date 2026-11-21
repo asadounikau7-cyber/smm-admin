@@ -7,7 +7,7 @@ import { DateTime } from "luxon";
 import { db } from "./db";
 import { encryptJson } from "./crypto";
 import { importRegistry, type Registry } from "./registry";
-import { checkSeriesTests, saveYtTestSettings, startSeriesTest } from "./seriesTest";
+import { checkSeriesTests, recheckPassedSeries, saveYtTestSettings, startSeriesTest } from "./seriesTest";
 import { buildWeek } from "./planner";
 
 const SLUGS = ["test-st-ok", "test-st-bad"];
@@ -116,6 +116,17 @@ describe("YouTube series test", () => {
     expect(s.testNote).toMatch(/Заблокирован в 3 странах/);
     expect(s.launchJobId).toBeNull();
     expect(await db.notification.findUnique({ where: { dedupKey: `series-test:${s1.id}` } })).not.toBeNull();
+    await db.notification.deleteMany({ where: { dedupKey: { startsWith: "series-test:" } } });
+  });
+  it("a passed series whose test video later gets 18+ is taken back as failed", async () => {
+    const s0 = await db.series.findUniqueOrThrow({ where: { slug: SLUGS[0] } });
+    expect(s0.stage).toBe("IN_WORK");
+    fakeYouTube({ id: "vid_ok", status: { uploadStatus: "processed", privacyStatus: "unlisted" }, contentDetails: { contentRating: { ytRating: "ytAgeRestricted" } } });
+    const out = await recheckPassedSeries();
+    expect(out).toHaveLength(1);
+    const s = await db.series.findUniqueOrThrow({ where: { id: s0.id } });
+    expect(s.stage).toBe("TEST_FAILED");
+    expect(s.testNote).toMatch(/^18\+/);
     await db.notification.deleteMany({ where: { dedupKey: { startsWith: "series-test:" } } });
   });
 });
