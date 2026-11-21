@@ -221,8 +221,9 @@ export async function enqueueMain(seriesId: string) {
   const eps = series.episodes.slice(0, s.mainEpisodes);
   const mains = (await channels("MAIN")).filter((m) => series.allowedGeos.includes(m.geo as string));
   if (!mains.length) return [];
-  // Already lined up on a main channel: leave it there.
+  // Already lined up on a main channel, or already out on one (e.g. launched before the conveyor): leave it.
   if (await db.channelQueueItem.findFirst({ where: { seriesId, account: { role: "MAIN" } } })) return [];
+  if (await alreadyOnMain(seriesId)) return [];
   const load = await Promise.all(mains.map(async (m) => ({ m, n: await db.channelQueueItem.count({ where: { accountId: m.id, jobId: null } }) })));
   const target = load.sort((x, y) => x.n - y.n)[0].m;
   const last = await db.channelQueueItem.findFirst({ where: { accountId: target.id }, orderBy: { position: "desc" } });
@@ -265,6 +266,57 @@ export async function rebalanceMain() {
     if (!didMove) break;
   }
   return moved;
+}
+
+/** A public upload of this series exists on some main channel outside the conveyor's queue. */
+async function alreadyOnMain(seriesId: string, exceptAccountId?: string) {
+  const ep = await db.episode.findFirst({ where: { seriesId, mainUrl: { not: null } } });
+  if (ep) return true;
+  const job = await db.publicationJob.findFirst({
+    where: {
+      platform: "YOUTUBE",
+      visibility: "PUBLIC",
+      status: { notIn: ["CANCELLED", "DRAFT", "BLOCKED", "FAILED"] },
+      // Out means on YouTube already: uploaded (scheduled or public) or published.
+      AND: [{ OR: [{ externalId: { not: null } }, { status: { in: ["PUBLISHED", "MANUALLY_SCHEDULED"] } }] }],
+      account: { role: "MAIN" },
+      ...(exceptAccountId ? { accountId: { not: exceptAccountId } } : {}),
+      OR: [{ meta: { path: ["seriesId"], equals: seriesId } }, { rule: { seriesId } }],
+    },
+    select: { id: true },
+  });
+  return Boolean(job);
+}
+
+/**
+ * A series lined up on a main channel that is already out on another main channel is a duplicate:
+ * its waiting episodes (and jobs not uploaded yet) are dropped from this channel.
+ */
+export async function dropMainDuplicates() {
+  const items = await db.channelQueueItem.findMany({ where: { account: { role: "MAIN" } }, include: { series: { select: { title: true } } } });
+  const groups = new Map<string, typeof items>();
+  for (const i of items) groups.set(`${i.accountId}|${i.seriesId}`, [...(groups.get(`${i.accountId}|${i.seriesId}`) ?? []), i]);
+  const dropped: string[] = [];
+  for (const group of groups.values()) {
+    const { accountId, seriesId } = group[0];
+    const jobs = (await Promise.all(group.map((i) => (i.jobId ? db.publicationJob.findUnique({ where: { id: i.jobId } }) : null)))).filter(Boolean);
+    if (jobs.some((j) => j!.externalId || !["QUEUED", "CANCELLED"].includes(j!.status))) continue; // this channel already has it out
+    const ours = new Set(group.map((i) => i.jobId).filter(Boolean));
+    const other = await db.publicationJob.findFirst({
+      where: {
+        platform: "YOUTUBE", visibility: "PUBLIC", status: { notIn: ["CANCELLED", "DRAFT", "BLOCKED", "FAILED"] },
+        AND: [{ OR: [{ externalId: { not: null } }, { status: { in: ["PUBLISHED", "MANUALLY_SCHEDULED"] } }] }],
+        account: { role: "MAIN" }, accountId: { not: accountId }, OR: [{ meta: { path: ["seriesId"], equals: seriesId } }, { rule: { seriesId } }],
+      },
+      select: { id: true },
+    });
+    const viaUrl = await db.episode.findFirst({ where: { seriesId, mainUrl: { not: null } } });
+    if (!other && !viaUrl) continue;
+    for (const j of jobs) if (j && ours.has(j.id) && j.status === "QUEUED") await db.publicationJob.update({ where: { id: j.id }, data: { status: "CANCELLED" } });
+    await db.channelQueueItem.deleteMany({ where: { id: { in: group.map((i) => i.id) } } });
+    dropped.push(group[0].series.title);
+  }
+  return dropped;
 }
 
 /** Passed series that aren't lined up on any main channel yet (e.g. no channel fit when they passed). */
@@ -313,6 +365,7 @@ export async function scheduleMain(now = new Date()) {
   const s = await getConveyorSettings();
   if (!s.enabled) return [];
   await backfillMain();
+  for (const t of await dropMainDuplicates()) console.log(`[conveyor] duplicate dropped: ${t}`);
   await rebalanceMain();
   const created: { account: string; episode: string; at: Date }[] = [];
   for (const account of await channels("MAIN")) {

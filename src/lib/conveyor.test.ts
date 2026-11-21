@@ -7,7 +7,7 @@ import { DateTime } from "luxon";
 import { db } from "./db";
 import { encryptJson } from "./crypto";
 import { importRegistry, type Registry } from "./registry";
-import { DEFAULT_CONVEYOR, rebalanceMain, releaseTestsOnMainChannels, saveConveyorSettings, scheduleMain, scheduleTests, testTimes } from "./conveyor";
+import { DEFAULT_CONVEYOR, dropMainDuplicates, rebalanceMain, releaseTestsOnMainChannels, saveConveyorSettings, scheduleMain, scheduleTests, testTimes } from "./conveyor";
 import { checkSeriesTests, markTestPassed, saveYtTestSettings } from "./seriesTest";
 
 const SLUGS = ["conv-a", "conv-b", "conv-c", "conv-d", "conv-e"];
@@ -229,6 +229,23 @@ describe("YouTube conveyor", () => {
     expect((await db.publicationJob.findUniqueOrThrow({ where: { id: job.id } })).status).toBe("CANCELLED");
     expect((await db.series.findUniqueOrThrow({ where: { id: ids["conv-e"] } })).stage).toBe("NEW");
     await db.socialAccount.update({ where: { id: ids.cv_t_us1 }, data: { role: "TEST" } });
+  });
+
+  it("a series already out on one main channel is dropped from another one's line", async () => {
+    await db.socialAccount.update({ where: { id: ids.cv_m_uk }, data: { role: "MAIN" } });
+    const plan = await db.weeklyPlan.findFirstOrThrow();
+    await db.publicationJob.create({
+      data: {
+        planId: plan.id, accountId: ids.cv_m_us2, platform: "YOUTUBE", format: "YT_SHORT", visibility: "PUBLIC", instanceKey: "conv-dup", idempotencyKey: "conv-dup",
+        status: "PUBLISHED", scheduledAt: now, localTime: "x", timezone: NY, deadlineAt: now, caption: "x", externalId: "vid_dup", meta: { seriesId: ids["conv-c"] },
+      },
+    });
+    await db.channelQueueItem.deleteMany({ where: { seriesId: ids["conv-c"] } });
+    const eps = await db.episode.findMany({ where: { seriesId: ids["conv-c"] }, orderBy: { number: "asc" }, take: 3 });
+    for (const [n, ep] of eps.entries()) await db.channelQueueItem.create({ data: { accountId: ids.cv_m_uk, seriesId: ids["conv-c"], episodeId: ep.id, position: 900 + n } });
+    expect(await dropMainDuplicates()).toEqual(["Conv conv-c"]);
+    expect(await db.channelQueueItem.count({ where: { seriesId: ids["conv-c"] } })).toBe(0);
+    await db.socialAccount.update({ where: { id: ids.cv_m_uk }, data: { role: "TEST" } });
   });
 
   it("jitter never puts a test before 09:00", () => {
