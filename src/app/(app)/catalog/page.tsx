@@ -172,6 +172,7 @@ export default async function CatalogPage({ searchParams }: { searchParams: SP }
                   </select>
                 </div>
                 <div><label className="label">Хештеги по умолчанию</label><input name="hashtags" defaultValue={selected.hashtags ?? ""} placeholder="#drama #shortdrama" className="input" /></div>
+                <div className="md:col-span-2"><label className="label">Название-завязка для YouTube</label><input name="hookTitle" defaultValue={selected.hookTitle ?? ""} maxLength={90} className="input" placeholder="She Was Sold to the Mafia King—Now He Won't Let Her Go!" /></div>
                 <div className="md:col-span-2"><label className="label">Синопсис</label><textarea name="synopsis" defaultValue={selected.synopsis ?? ""} rows={2} className="input" /></div>
                 <div><button className="btn">Сохранить сериал</button></div>
               </form>

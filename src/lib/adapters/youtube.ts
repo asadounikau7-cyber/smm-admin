@@ -79,7 +79,7 @@ function snippetBody(job: PublicationJob) {
  * Brings public (main channel) uploads to the current title/description format: rewrites the job's
  * text and, for a video already on YouTube, its snippet. A few per call to stay light on quota (50 units each).
  */
-export async function refreshYoutubeMeta(limit = 10) {
+export async function refreshYoutubeMeta(limit = 100) {
   const jobs = await db.publicationJob.findMany({
     where: {
       platform: "YOUTUBE",
@@ -97,10 +97,12 @@ export async function refreshYoutubeMeta(limit = 10) {
   for (const job of jobs) {
     if (done.length >= limit) break;
     const meta = (job.meta ?? {}) as Record<string, unknown>;
-    if (meta.ytMeta === YT_META_VERSION || typeof meta.episodeId !== "string") continue;
+    if (typeof meta.episodeId !== "string") continue;
     const ep = await db.episode.findUnique({ where: { id: meta.episodeId }, include: { series: true } });
     if (!ep) continue;
     const m = youtubeMeta(ep.series, ep);
+    // Up to date already (format version and text, e.g. a hook title added later).
+    if (meta.ytMeta === YT_META_VERSION && job.title === m.title && job.caption === m.description) continue;
     const next = { ...job, title: m.title, caption: m.description, meta: { ...meta, tags: m.tags, ytMeta: YT_META_VERSION } };
     let error: string | null = null;
     if (job.externalId) {
@@ -548,4 +550,64 @@ export async function collectChannelStats(now = new Date()) {
     }
   }
   return ok;
+}
+
+/**
+ * Series playlists on main channels: every episode uploaded to a main channel goes into that
+ * channel's public playlist of its series, so recommendations can carry a viewer from part to part.
+ * Adding to a playlist doesn't change the video itself. At most `limit` API writes per call (50 units each).
+ */
+export async function syncSeriesPlaylists(limit = 12) {
+  const jobs = await db.publicationJob.findMany({
+    where: {
+      platform: "YOUTUBE",
+      visibility: "PUBLIC",
+      externalId: { not: null },
+      status: { notIn: ["CANCELLED", "FAILED", "DRAFT", "BLOCKED"] },
+      account: { role: "MAIN", status: "ACTIVE" },
+      createdAt: { gt: new Date(Date.now() - 30 * 86400_000) },
+    },
+    include: { account: true, rule: { select: { seriesId: true } } },
+    orderBy: { scheduledAt: "asc" },
+  });
+  let writes = 0;
+  const added: string[] = [];
+  for (const job of jobs) {
+    if (writes >= limit) break;
+    const meta = (job.meta ?? {}) as Record<string, unknown>;
+    if (meta.playlistId || meta.playlistError) continue;
+    const seriesId = (typeof meta.seriesId === "string" ? meta.seriesId : null) ?? job.rule?.seriesId;
+    if (!seriesId) continue;
+    const series = await db.series.findUnique({ where: { id: seriesId }, select: { title: true } });
+    if (!series) continue;
+    try {
+      let pl = await db.channelPlaylist.findUnique({ where: { accountId_seriesId: { accountId: job.accountId, seriesId } } });
+      if (!pl) {
+        const name = series.title.replace(/[<>]/g, "").slice(0, 130);
+        const { body } = await api(job.account, "playlists?part=snippet,status", {
+          method: "POST",
+          body: JSON.stringify({
+            snippet: { title: `${name} — all parts`.slice(0, 150), description: `${name}: every part in order. Subscribe for a new drama every day!` },
+            status: { privacyStatus: "public" },
+          }),
+        });
+        writes++;
+        pl = await db.channelPlaylist.create({ data: { accountId: job.accountId, seriesId, playlistId: body.id } });
+      }
+      await api(job.account, "playlistItems?part=snippet", {
+        method: "POST",
+        body: JSON.stringify({ snippet: { playlistId: pl.playlistId, resourceId: { kind: "youtube#video", videoId: job.externalId } } }),
+      });
+      writes++;
+      await db.publicationJob.update({ where: { id: job.id }, data: { meta: { ...meta, playlistId: pl.playlistId } } });
+      added.push(`${series.title} → @${job.account.handle}`);
+    } catch (e) {
+      const msg = (e as Error).message;
+      console.warn(`[playlists] ${job.externalId}: ${msg.slice(0, 200)}`);
+      if (/quota/i.test(msg)) break;
+      // Permanent refusals are remembered so the same video isn't retried every tick.
+      if (/403|forbidden|insufficient|notFound|404/i.test(msg)) await db.publicationJob.update({ where: { id: job.id }, data: { meta: { ...meta, playlistError: msg.slice(0, 200) } } });
+    }
+  }
+  return added;
 }

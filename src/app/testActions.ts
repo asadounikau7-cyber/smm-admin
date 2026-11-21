@@ -168,3 +168,20 @@ export async function refreshStatsAction() {
   revalidatePath("/stats");
   redirect("/stats");
 }
+
+export async function saveHooksAction(f: FormData) {
+  const u = await requireUser();
+  let n = 0;
+  for (const [k, v] of f.entries()) {
+    if (!k.startsWith("hook_") || typeof v !== "string") continue;
+    const id = k.slice(5);
+    const hook = v.replace(/\s+/g, " ").trim().slice(0, 90) || null;
+    const cur = await db.series.findUnique({ where: { id }, select: { hookTitle: true } });
+    if (!cur || cur.hookTitle === hook) continue;
+    await db.series.update({ where: { id }, data: { hookTitle: hook } });
+    n++;
+  }
+  await audit("series.hooks.saved", "Series", null, u.id, { count: n });
+  revalidatePath("/hooks");
+  redirect(`/hooks?ok=${encodeURIComponent(`Сохранено: ${n}`)}`);
+}

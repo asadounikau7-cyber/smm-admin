@@ -1,7 +1,7 @@
 import type { Episode, Series } from "@prisma/client";
 
 /** Version of the title/description format; jobs uploaded with an older one get their YouTube snippet refreshed. */
-export const YT_META_VERSION = 3;
+export const YT_META_VERSION = 4;
 
 const BASE_TAGS = ["short drama", "mini drama", "drama", "drama shorts", "shorts", "romance drama", "movie clips", "drama series"];
 const BASE_HASHTAGS = ["#shorts", "#drama", "#shortdrama", "#minidrama", "#dramashorts"];
@@ -13,11 +13,14 @@ const clean = (s: string) => s.replace(/[<>]/g, "").replace(/\s+/g, " ").trim();
  * A viewer who lands on a Short has never seen the series: "Part N" instead of "S01E02",
  * and a description that tells them the next part is on the channel.
  */
-export function youtubeMeta(series: Pick<Series, "title" | "synopsis" | "hashtags">, ep: Pick<Episode, "season" | "number">) {
+export function youtubeMeta(series: Pick<Series, "title" | "synopsis" | "hashtags"> & { hookTitle?: string | null }, ep: Pick<Episode, "season" | "number">) {
   const name = clean(series.title);
   const part = ep.season > 1 ? `Season ${ep.season} Part ${ep.number}` : `Part ${ep.number}`;
-  let title = `${name} | ${part} #shortdrama`;
-  if (title.length > 100) title = `${name.slice(0, 100 - part.length - 4).trimEnd()}… | ${part}`;
+  // The plot hook sells better than the series name; the name stays in the description and tags.
+  const head = series.hookTitle ? clean(series.hookTitle) : name;
+  let title = `${head} | ${part} #shortdrama`;
+  if (title.length > 100) title = `${head} | ${part}`;
+  if (title.length > 100) title = `${head.slice(0, 100 - part.length - 4).trimEnd()}… | ${part}`;
 
   const own = (series.hashtags ?? "").split(/\s+/).filter((h) => /^#\w+/.test(h));
   const hashtags = [...new Set([...BASE_HASHTAGS, ...own.map((h) => h.toLowerCase())])].join(" ");

@@ -96,6 +96,8 @@ model Series {
   /// Off by default so 600+ imported series don't flood the weekly plan
   active    Boolean   @default(false)
   synopsis  String?
+  /// YouTube title hook: the plot set-up in one line ("She Was Sold to the Mafia King—Now He Won't Let Her Go!")
+  hookTitle String?
   hashtags  String?
   /// Banned / Inactive: shown in red everywhere, excluded from plans and new versions
   bannedAt  DateTime?
@@ -216,6 +218,7 @@ model SocialAccount {
   jobs           PublicationJob[]
   queue          ChannelQueueItem[]
   stats          ChannelStat[]
+  playlists      ChannelPlaylist[]
   /// Uniqueization: this channel's own look (crop, speed, colour); versions for it are made from this template
   editTemplateId String?
   editTemplate   EditTemplate? @relation(fields: [editTemplateId], references: [id], onDelete: SetNull)
@@ -511,5 +514,17 @@ model ChannelStat {
   takenAt      DateTime      @default(now())
 
   @@unique([accountId, day])
+}
+
+/// One public playlist per series on each main channel ("<series> — all parts"), filled as episodes go up.
+model ChannelPlaylist {
+  id         String        @id @default(cuid())
+  accountId  String
+  account    SocialAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  seriesId   String
+  playlistId String
+  createdAt  DateTime      @default(now())
+
+  @@unique([accountId, seriesId])
 }
 

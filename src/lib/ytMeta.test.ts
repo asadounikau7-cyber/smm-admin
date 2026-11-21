@@ -17,4 +17,10 @@ describe("youtubeMeta", () => {
     expect(m.description).toContain("Plot b");
     expect(m.description).not.toMatch(/[<>]/);
   });
+  it("puts the hook title first when the series has one", () => {
+    const m = youtubeMeta({ title: "Bound To The Cold Tycoon", synopsis: null, hashtags: null, hookTitle: "She Owed Him a Debt—Now the Cold Tycoon Wants Her Instead!" }, { season: 1, number: 2 });
+    expect(m.title).toBe("She Owed Him a Debt—Now the Cold Tycoon Wants Her Instead! | Part 2 #shortdrama");
+    expect(m.description.startsWith("Bound To The Cold Tycoon | Part 2")).toBe(true);
+    expect(m.tags[0]).toBe("Bound To The Cold Tycoon");
+  });
 });
