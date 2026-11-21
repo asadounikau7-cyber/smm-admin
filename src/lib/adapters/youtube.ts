@@ -491,3 +491,61 @@ export async function deleteTestUploads(accountId: string, userId: string | null
   await audit("youtube.testUploads.deleted", "SocialAccount", accountId, userId, { deleted, errors });
   return { deleted, errors };
 }
+
+/** Public numbers of one channel right now: channel totals plus likes/comments over its public videos. */
+export async function ytChannelSnapshot(account: SocialAccount) {
+  const { body: ch } = await api(account, "channels?part=statistics,contentDetails&mine=true");
+  const c = ch.items?.[0];
+  if (!c) throw new Error("Канал не найден");
+  const st = c.statistics ?? {};
+  const uploads: string | undefined = c.contentDetails?.relatedPlaylists?.uploads;
+  const ids: string[] = [];
+  let page = "";
+  for (let i = 0; uploads && i < 6; i++) {
+    const { body } = await api(account, `playlistItems?part=contentDetails&maxResults=50&playlistId=${uploads}${page ? `&pageToken=${page}` : ""}`);
+    for (const it of body.items ?? []) if (it.contentDetails?.videoId) ids.push(it.contentDetails.videoId);
+    if (!body.nextPageToken) break;
+    page = body.nextPageToken;
+  }
+  let likes = 0, comments = 0, publicVideos = 0;
+  let top: { id: string; title: string; views: number } | null = null;
+  for (let i = 0; i < ids.length; i += 50) {
+    const { body } = await api(account, `videos?part=statistics,status,snippet&id=${ids.slice(i, i + 50).join(",")}`);
+    for (const v of body.items ?? []) {
+      if (v.status?.privacyStatus !== "public") continue;
+      publicVideos++;
+      likes += Number(v.statistics?.likeCount ?? 0);
+      comments += Number(v.statistics?.commentCount ?? 0);
+      const views = Number(v.statistics?.viewCount ?? 0);
+      if (!top || views > top.views) top = { id: v.id, title: String(v.snippet?.title ?? "").slice(0, 120), views };
+    }
+  }
+  return {
+    subscribers: Number(st.subscriberCount ?? 0),
+    views: Number(st.viewCount ?? 0),
+    videos: Number(st.videoCount ?? 0),
+    likes,
+    comments,
+    publicVideos,
+    top,
+  };
+}
+
+/** Worker: today's snapshot for every connected YouTube channel (overwritten through the day). */
+export async function collectChannelStats(now = new Date()) {
+  const { DateTime } = await import("luxon");
+  const day = DateTime.fromJSDate(now, { zone: env().BASE_TIMEZONE }).toISODate()!;
+  const accounts = await db.socialAccount.findMany({ where: { platform: "YOUTUBE", status: "ACTIVE", credentials: { not: null } } });
+  let ok = 0;
+  for (const a of accounts) {
+    try {
+      const s = await ytChannelSnapshot(a);
+      const data = { ...s, top: s.top ?? undefined, takenAt: now };
+      await db.channelStat.upsert({ where: { accountId_day: { accountId: a.id, day } }, update: data, create: { accountId: a.id, day, ...data } });
+      ok++;
+    } catch (e) {
+      console.warn(`[stats] @${a.handle}: ${(e as Error).message}`);
+    }
+  }
+  return ok;
+}

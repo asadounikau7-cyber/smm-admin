@@ -7,6 +7,7 @@ const ITEMS = [
   { href: "/plan", label: "Неделя" },
   { href: "/publications", label: "Публикации" },
   { href: "/youtube", label: "YouTube-конвейер" },
+  { href: "/stats", label: "Статистика" },
   { href: "/catalog", label: "Каталог" },
   { href: "/variants", label: "Версии" },
   { href: "/templates", label: "Шаблоны" },

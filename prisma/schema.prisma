@@ -215,6 +215,7 @@ model SocialAccount {
   rules          ReleaseRule[]
   jobs           PublicationJob[]
   queue          ChannelQueueItem[]
+  stats          ChannelStat[]
 
   @@unique([platform, externalId])
 }
@@ -486,3 +487,25 @@ model VideoVariant {
   @@unique([episodeId, signature])
   @@index([status, createdAt])
 }
+
+/// Daily snapshot of a channel's public numbers (YouTube Data API), the latest of that local day.
+model ChannelStat {
+  id           String        @id @default(cuid())
+  accountId    String
+  account      SocialAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  /// Local date in the base time zone, YYYY-MM-DD
+  day          String
+  subscribers  Int
+  views        Int
+  videos       Int
+  /// Sums over the channel's public videos uploaded by the admin
+  likes        Int
+  comments     Int
+  publicVideos Int
+  /// Best video of the channel by views: { id, title, views }
+  top          Json?
+  takenAt      DateTime      @default(now())
+
+  @@unique([accountId, day])
+}
+

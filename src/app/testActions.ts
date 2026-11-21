@@ -159,3 +159,11 @@ export async function deleteTestUploadsAction(f: FormData) {
   const msg = `Удалено тестовых роликов: ${r.deleted}${r.errors.length ? `, ошибок: ${r.errors.length} (${r.errors[0]})` : ""}`;
   redirect(`/youtube?${r.errors.length ? "err" : "ok"}=${encodeURIComponent(msg)}`);
 }
+
+export async function refreshStatsAction() {
+  await requireUser();
+  const { collectChannelStats } = await import("@/lib/adapters/youtube");
+  await collectChannelStats();
+  revalidatePath("/stats");
+  redirect("/stats");
+}
