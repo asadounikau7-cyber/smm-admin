@@ -216,6 +216,9 @@ model SocialAccount {
   jobs           PublicationJob[]
   queue          ChannelQueueItem[]
   stats          ChannelStat[]
+  /// Uniqueization: this channel's own look (crop, speed, colour); versions for it are made from this template
+  editTemplateId String?
+  editTemplate   EditTemplate? @relation(fields: [editTemplateId], references: [id], onDelete: SetNull)
 
   @@unique([platform, externalId])
 }
@@ -441,6 +444,7 @@ model EditTemplate {
   createdAt   DateTime       @default(now())
   updatedAt   DateTime       @updatedAt
   variants    VideoVariant[]
+  accounts    SocialAccount[]
 }
 
 enum VariantStatus {

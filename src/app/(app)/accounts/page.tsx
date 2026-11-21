@@ -9,6 +9,7 @@ const STATUS: Record<string, string> = { ACTIVE: "Активен", NEEDS_RECONNE
 export default async function AccountsPage({ searchParams }: { searchParams: Promise<{ ok?: string; err?: string }> }) {
   const sp = await searchParams;
   await loadIntegrationKeys();
+  const templates = await db.editTemplate.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true } });
   const accounts = await db.socialAccount.findMany({ orderBy: [{ platform: "asc" }, { handle: "asc" }], include: { octoProfile: true, _count: { select: { jobs: true } } } });
   const e = env();
   const ytReady = Boolean(e.GOOGLE_CLIENT_ID && e.GOOGLE_CLIENT_SECRET);
@@ -38,7 +39,7 @@ export default async function AccountsPage({ searchParams }: { searchParams: Pro
                     <div className="text-xs muted">{a.displayName ?? a.externalId}{a.octoProfile ? ` · Octo: ${a.octoProfile.title}` : ""}</div>
                   </td>
                   <td colSpan={2}>
-                    <form key={`${a.id}-${a.geo}-${a.role}-${a.language}`} action={updateAccountAction} className="flex gap-1">
+                    <form key={`${a.id}-${a.geo}-${a.role}-${a.language}-${a.editTemplateId}`} action={updateAccountAction} className="flex gap-1">
                       <input type="hidden" name="id" value={a.id} />
                       <input name="language" defaultValue={a.language ?? ""} placeholder="en" className="input w-16" />
                       {a.platform === "YOUTUBE" && (
@@ -51,6 +52,10 @@ export default async function AccountsPage({ searchParams }: { searchParams: Pro
                           <select name="role" defaultValue={a.role} className="input w-28" title="Роль в YouTube-конвейере">
                             <option value="MAIN">Боевой</option>
                             <option value="TEST">Тестовый</option>
+                          </select>
+                          <select name="editTemplateId" defaultValue={a.editTemplateId ?? ""} className="input w-44" title="Шаблон уникализации канала">
+                            <option value="">Без шаблона (оригинал)</option>
+                            {templates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
                           </select>
                         </>
                       )}

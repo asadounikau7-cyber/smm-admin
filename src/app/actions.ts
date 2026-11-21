@@ -139,6 +139,7 @@ export async function updateAccountAction(f: FormData) {
       ...(status ? { status } : {}),
       ...(f.has("geo") ? { geo: ["US", "UK"].includes(s(f, "geo")) ? s(f, "geo") : null } : {}),
       ...(f.has("role") ? { role: s(f, "role") === "TEST" ? ("TEST" as const) : ("MAIN" as const) } : {}),
+      ...(f.has("editTemplateId") ? { editTemplateId: s(f, "editTemplateId") || null } : {}),
       ...(s(f, "mode") ? { tiktokMode: s(f, "mode") as TikTokMode } : {}),
     },
   });
