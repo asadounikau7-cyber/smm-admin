@@ -12,7 +12,7 @@ import { VALIDATORS } from "./validators";
 import { ytVideoHealth } from "./adapters/youtube";
 import { notify, resolveNotification } from "./notify";
 import { audit } from "./audit";
-import { conveyorGeos, enqueueMain, getConveyorSettings, geoCountries } from "./conveyor";
+import { GEOS, enqueueMain, getConveyorSettings, geoCountries } from "./conveyor";
 
 /**
  * YouTube test of a series: one episode goes to the test channel; if YouTube lets it live through the check window
@@ -189,7 +189,8 @@ export async function launchFirstEpisode(seriesId: string, accountId: string, us
 }
 
 export async function markTestPassed(seriesId: string, note: string, userId?: string | null, allowedGeos?: string[]) {
-  const geos = allowedGeos ?? (await conveyorGeos());
+  // A clean test video plays everywhere: the series may go to every geo, including ones without a main channel yet.
+  const geos = allowedGeos ?? Object.keys(GEOS);
   const series = await db.series.update({
     where: { id: seriesId },
     data: { stage: "IN_WORK", inWorkAt: new Date(), active: true, testNote: note, allowedGeos: geos },
@@ -270,8 +271,8 @@ async function checkOne(s: Series, settings: YtTestSettings) {
   // Blocked only in some countries: the series can still go to the geos where it plays.
   let geos: string[] | undefined;
   if (health.state === "bad") {
-    const ours = await conveyorGeos();
-    if (!health.region || !ours.length) return markTestFailed(s.id, health.note);
+    const ours = Object.keys(GEOS);
+    if (!health.region) return markTestFailed(s.id, health.note);
     const { blocked, allowed } = health.region;
     geos = ours.filter((g) => geoCountries(g).every((c) => !blocked?.includes(c) && (!allowed || allowed.includes(c))));
     if (!geos.length) return markTestFailed(s.id, `${health.note}. Заблокирован во всех наших гео`);

@@ -109,11 +109,10 @@ export async function backlogDays(geo: Geo, s: ConveyorSettings) {
  * (YouTube's region data decides where the series may go), so test channels of a geo with
  * no main channel yet keep testing for the geos that have one.
  */
-async function testBacklog(geo: Geo, s: ConveyorSettings) {
-  const own = await backlogDays(geo, s);
-  if (own !== Infinity) return own;
-  const others = await Promise.all((await conveyorGeos()).map((g) => backlogDays(g, s)));
-  return others.length ? Math.min(...others) : Infinity;
+async function testBacklog(_geo: Geo, s: ConveyorSettings) {
+  // Tests feed every geo, so they keep going while any geo with a main channel is short of content.
+  const all = await Promise.all((await conveyorGeos()).map((g) => backlogDays(g, s)));
+  return all.length ? Math.min(...all) : Infinity;
 }
 
 // ---------- tests ----------
@@ -283,6 +282,8 @@ async function backfillMain() {
   const passed = await db.series.findMany({
     where: { stage: "IN_WORK", bannedAt: null, allowedGeos: { hasSome: geos } },
     select: { id: true, allowedGeos: true, queueItems: { select: { accountId: true } } },
+    // Oldest passes first, so a new geo starts with the series that already proved themselves longest ago.
+    orderBy: { inWorkAt: "asc" },
   });
   for (const p of passed) {
     const queuedOn = new Set(p.queueItems.map((q) => mains.find((m) => m.id === q.accountId)?.geo));
