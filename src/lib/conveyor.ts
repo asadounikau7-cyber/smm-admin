@@ -140,9 +140,31 @@ async function nextSeries(s: ConveyorSettings) {
 }
 
 /** Worker: fills today's free test slots on every test channel. Idempotent per slot. */
+/**
+ * A test channel switched to main: its planned tests that haven't started uploading are called off,
+ * and their series go back to the pool to be tested on another test channel.
+ */
+export async function releaseTestsOnMainChannels() {
+  const jobs = await db.publicationJob.findMany({
+    where: {
+      status: "QUEUED",
+      externalId: null,
+      account: { platform: "YOUTUBE", role: "MAIN" },
+    },
+    select: { id: true, meta: true },
+  });
+  const tests = jobs.filter((j) => typeof (j.meta as { conveyorSlot?: unknown } | null)?.conveyorSlot === "string");
+  for (const j of tests) {
+    await db.publicationJob.update({ where: { id: j.id }, data: { status: "CANCELLED" } });
+    await db.series.updateMany({ where: { testJobId: j.id, stage: "TESTING" }, data: { stage: "NEW", testJobId: null, testNote: null } });
+  }
+  return tests.length;
+}
+
 export async function scheduleTests(now = new Date()) {
   const s = await getConveyorSettings();
   if (!s.enabled) return [];
+  await releaseTestsOnMainChannels();
   const created: { account: string; series: string; at: Date }[] = [];
   for (const geo of Object.keys(GEOS) as Geo[]) {
     const tests = await channels("TEST", geo);
@@ -223,6 +245,37 @@ export async function enqueueMain(seriesId: string) {
  * Series that passed while a geo had no main channel go to that geo's first main channel once
  * one appears. Only geos with a main channel and no queue entry for the series are touched.
  */
+/**
+ * Main channels of one geo share the line: when one has far more waiting than another (e.g. a channel
+ * was just added), whole series that haven't been given a time yet move from the end of the busiest
+ * line to the end of the least busy one. Episodes of a series always stay together and in order.
+ */
+export async function rebalanceMain() {
+  let moved = 0;
+  for (const geo of await conveyorGeos()) {
+    const mains = await channels("MAIN", geo);
+    if (mains.length < 2) continue;
+    for (let guard = 0; guard < 200; guard++) {
+      const load = await Promise.all(mains.map(async (m) => ({ m, n: await db.channelQueueItem.count({ where: { accountId: m.id, jobId: null } }) })));
+      load.sort((a, b) => b.n - a.n);
+      const [max, min] = [load[0], load[load.length - 1]];
+      const items = await db.channelQueueItem.findMany({ where: { accountId: max.m.id }, orderBy: { position: "desc" } });
+      const last = items[0];
+      if (!last) break;
+      const group = items.filter((i) => i.seriesId === last.seriesId);
+      // Only a series nothing of which is on its way yet, and only if it narrows the gap.
+      if (group.some((i) => i.jobId) || max.n - min.n <= group.length) break;
+      const tail = await db.channelQueueItem.findFirst({ where: { accountId: min.m.id }, orderBy: { position: "desc" } });
+      let pos = (tail?.position ?? 0) + 1;
+      for (const i of [...group].sort((a, b) => a.position - b.position)) {
+        await db.channelQueueItem.update({ where: { id: i.id }, data: { accountId: min.m.id, position: pos++ } });
+      }
+      moved += group.length;
+    }
+  }
+  return moved;
+}
+
 async function backfillMain() {
   const geos = await conveyorGeos();
   if (!geos.length) return;
@@ -269,6 +322,7 @@ export async function scheduleMain(now = new Date()) {
   const s = await getConveyorSettings();
   if (!s.enabled) return [];
   await backfillMain();
+  await rebalanceMain();
   const created: { account: string; episode: string; at: Date }[] = [];
   for (const account of await channels("MAIN")) {
     const tz = geoTz(account.geo as Geo);

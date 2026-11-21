@@ -7,11 +7,11 @@ import { DateTime } from "luxon";
 import { db } from "./db";
 import { encryptJson } from "./crypto";
 import { importRegistry, type Registry } from "./registry";
-import { DEFAULT_CONVEYOR, saveConveyorSettings, scheduleMain, scheduleTests, testTimes } from "./conveyor";
+import { DEFAULT_CONVEYOR, rebalanceMain, releaseTestsOnMainChannels, saveConveyorSettings, scheduleMain, scheduleTests, testTimes } from "./conveyor";
 import { checkSeriesTests, markTestPassed, saveYtTestSettings } from "./seriesTest";
 
 const SLUGS = ["conv-a", "conv-b", "conv-c", "conv-d", "conv-e"];
-const EXT = ["cv_t_us1", "cv_t_us2", "cv_m_us", "cv_m_uk"];
+const EXT = ["cv_t_us1", "cv_t_us2", "cv_m_us", "cv_m_uk", "cv_m_us2"];
 const reg: Registry = {
   verified_at_utc: "2026-11-06T18:00:00Z",
   series: SLUGS.map((id) => ({
@@ -191,6 +191,38 @@ describe("YouTube conveyor", () => {
     const all = await db.publicationJob.findMany({ where: { id: { in: items.map((i) => i.jobId!) } } });
     const t = items.map((i) => all.find((j) => j.id === i.jobId)!.scheduledAt.getTime());
     expect([...t].sort((a, b) => a - b)).toEqual(t);
+  });
+
+  it("a new main channel in the geo takes whole waiting series off the busy one", async () => {
+    await db.channelQueueItem.deleteMany({ where: { accountId: ids.cv_m_us } });
+    let pos = 1;
+    for (const slug of SLUGS) {
+      const eps = await db.episode.findMany({ where: { seriesId: ids[slug] }, orderBy: { number: "asc" }, take: 3 });
+      for (const ep of eps) await db.channelQueueItem.create({ data: { accountId: ids.cv_m_us, seriesId: ids[slug], episodeId: ep.id, position: pos++ } });
+    }
+    ids.cv_m_us2 = (await db.socialAccount.create({ data: { platform: "YOUTUBE", externalId: "cv_m_us2", handle: "cv_m_us2", language: "en", credentials: creds(), geo: "US", role: "MAIN" } })).id;
+    expect(await rebalanceMain()).toBe(6);
+    const a = await db.channelQueueItem.findMany({ where: { accountId: ids.cv_m_us }, orderBy: { position: "asc" } });
+    const b = await db.channelQueueItem.findMany({ where: { accountId: ids.cv_m_us2 }, orderBy: { position: "asc" } });
+    expect([a.length, b.length]).toEqual([9, 6]);
+    // Series stay whole and in episode order on each channel.
+    for (const line of [a, b]) {
+      const seen: string[] = [];
+      for (const i of line) if (seen[seen.length - 1] !== i.seriesId) seen.push(i.seriesId);
+      expect(new Set(seen).size).toBe(seen.length);
+    }
+    expect(new Set(b.map((i) => i.seriesId))).toEqual(new Set([ids["conv-d"], ids["conv-e"]]));
+    expect(await rebalanceMain()).toBe(0);
+  });
+
+  it("a test channel switched to main drops its planned tests and frees the series", async () => {
+    const job = await db.publicationJob.findFirstOrThrow({ where: { accountId: ids.cv_t_us1, status: "QUEUED", externalId: null, meta: { path: ["conveyorSlot"], string_starts_with: "2" } } });
+    await db.series.update({ where: { id: ids["conv-e"] }, data: { stage: "TESTING", testJobId: job.id } });
+    await db.socialAccount.update({ where: { id: ids.cv_t_us1 }, data: { role: "MAIN" } });
+    expect(await releaseTestsOnMainChannels()).toBeGreaterThan(0);
+    expect((await db.publicationJob.findUniqueOrThrow({ where: { id: job.id } })).status).toBe("CANCELLED");
+    expect((await db.series.findUniqueOrThrow({ where: { id: ids["conv-e"] } })).stage).toBe("NEW");
+    await db.socialAccount.update({ where: { id: ids.cv_t_us1 }, data: { role: "TEST" } });
   });
 
   it("jitter never puts a test before 09:00", () => {
