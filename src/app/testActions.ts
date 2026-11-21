@@ -148,3 +148,14 @@ export async function queueSeriesTestAction(f: FormData) {
   revalidatePath("/youtube");
   redirect(s(f, "back") || back(id, "ok", on ? "В очереди на тест: конвейер возьмёт его в ближайший слот" : "Убран из очереди на тест"));
 }
+
+export async function deleteTestUploadsAction(f: FormData) {
+  const u = await requireOwner();
+  const id = s(f, "id");
+  if (s(f, "confirm") !== "DELETE") redirect(`/youtube?err=${encodeURIComponent("Удаление не подтверждено")}`);
+  const { deleteTestUploads } = await import("@/lib/adapters/youtube");
+  const r = await deleteTestUploads(id, u.id);
+  revalidatePath("/youtube");
+  const msg = `Удалено тестовых роликов: ${r.deleted}${r.errors.length ? `, ошибок: ${r.errors.length} (${r.errors[0]})` : ""}`;
+  redirect(`/youtube?${r.errors.length ? "err" : "ok"}=${encodeURIComponent(msg)}`);
+}

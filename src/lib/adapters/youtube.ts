@@ -458,3 +458,36 @@ export async function ytVideoHealth(account: SocialAccount, videoId: string, exp
   if (rr?.allowed) return { state: "bad", note: `Доступен только в ${rr.allowed.length} странах (Content ID): ${rr.allowed.slice(0, 8).join(", ")}`, region: { allowed: rr.allowed } };
   return { state: "ok", note: "Ролик доступен, блокировок нет" };
 }
+
+/**
+ * Deletes from YouTube the private test uploads this admin made on a channel (before it becomes a
+ * main channel). Only our own test jobs are touched, never other videos on the channel; a series
+ * still in testing keeps its video. Returns how many videos were deleted.
+ */
+export async function deleteTestUploads(accountId: string, userId: string | null) {
+  const account = await db.socialAccount.findUniqueOrThrow({ where: { id: accountId } });
+  const jobs = await db.publicationJob.findMany({
+    where: { accountId, platform: "YOUTUBE", visibility: { not: "PUBLIC" }, externalId: { not: null }, instanceKey: { startsWith: "test:" } },
+  });
+  let deleted = 0;
+  const errors: string[] = [];
+  for (const job of jobs) {
+    const meta = (job.meta ?? {}) as Record<string, unknown>;
+    if (meta.deletedFromYouTube) continue;
+    const testing = await db.series.findFirst({ where: { testJobId: job.id, stage: "TESTING" } });
+    if (testing) continue;
+    try {
+      await api(account, `videos?id=${job.externalId}`, { method: "DELETE" });
+    } catch (e) {
+      const msg = (e as Error).message;
+      if (!/404|notFound|videoNotFound/i.test(msg)) {
+        errors.push(`${job.externalId}: ${msg.slice(0, 120)}`);
+        continue;
+      }
+    }
+    await db.publicationJob.update({ where: { id: job.id }, data: { meta: { ...meta, deletedFromYouTube: new Date().toISOString() } } });
+    deleted++;
+  }
+  await audit("youtube.testUploads.deleted", "SocialAccount", accountId, userId, { deleted, errors });
+  return { deleted, errors };
+}

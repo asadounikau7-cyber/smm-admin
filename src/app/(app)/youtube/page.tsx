@@ -3,7 +3,7 @@ import { DateTime } from "luxon";
 import { db } from "@/lib/db";
 import { Empty, PageHeader, StatusBadge } from "@/components/ui";
 import { backlogDays, GEOS, getConveyorSettings, isGeo, testTimes } from "@/lib/conveyor";
-import { queueSeriesTestAction } from "@/app/testActions";
+import { deleteTestUploadsAction, queueSeriesTestAction } from "@/app/testActions";
 import { studioEditUrl } from "@/lib/adapters/youtube";
 
 export const dynamic = "force-dynamic";
@@ -51,7 +51,7 @@ export default async function YouTubeConveyorPage() {
         <h2 className="mb-2 font-medium">Каналы</h2>
         <div className="card scroll-x">
           <table className="tbl">
-            <thead><tr><th>Канал</th><th>Гео</th><th>Роль</th><th>Профиль Octo</th><th>Статус</th></tr></thead>
+            <thead><tr><th>Канал</th><th>Гео</th><th>Роль</th><th>Профиль Octo</th><th>Статус</th><th></th></tr></thead>
             <tbody>
               {channels.map((c) => (
                 <tr key={c.id}>
@@ -60,6 +60,16 @@ export default async function YouTubeConveyorPage() {
                   <td>{c.role === "TEST" ? "Тестовый" : "Боевой"}</td>
                   <td className="muted">{c.octoProfile?.title ?? "—"}</td>
                   <td>{c.status === "ACTIVE" ? "активен" : <span className="text-red-600">{c.status}</span>}</td>
+                  <td>
+                    <details>
+                      <summary className="cursor-pointer text-xs muted">Удалить тестовые ролики</summary>
+                      <form action={deleteTestUploadsAction} className="mt-1 flex gap-1">
+                        <input type="hidden" name="id" value={c.id} />
+                        <input name="confirm" placeholder="DELETE" className="input w-24 text-xs" />
+                        <button className="btn text-xs">Удалить</button>
+                      </form>
+                    </details>
+                  </td>
                 </tr>
               ))}
             </tbody>
