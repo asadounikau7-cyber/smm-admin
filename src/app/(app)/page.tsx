@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { PageHeader, PlatformTag, StatusBadge, Empty } from "@/components/ui";
 import { resolveNotificationAction } from "@/app/actions";
 import { studioEditUrl } from "@/lib/adapters/youtube";
+import { ChannelStatsTable, StatsLink } from "@/components/channelStats";
 
 export default async function Dashboard() {
   const [issues, notes, upcoming, lastSync, manual, counts, studio] = await Promise.all([
@@ -45,6 +46,11 @@ export default async function Dashboard() {
         <Stat label="Доля подтверждённых" value={sent ? `${Math.round(((c.PUBLISHED ?? 0) / sent) * 100)}%` : "—"} />
         <Stat label="Синхронизация каталога" value={sync?.at ? new Date(sync.at).toLocaleString("ru-RU", { timeZone: "America/Winnipeg", dateStyle: "short", timeStyle: "short" }) : "не было"} />
       </div>
+
+      <section className="mb-6">
+        <div className="mb-2 flex items-center justify-between"><h2 className="font-medium">Боевые каналы YouTube</h2><StatsLink /></div>
+        <ChannelStatsTable mainOnly />
+      </section>
 
       {manual > 0 && (
         <Link href="/publications?status=ACTION_REQUIRED&platform=TIKTOK" className="card mb-4 flex items-center gap-3 p-4 text-sm hover:opacity-80">
