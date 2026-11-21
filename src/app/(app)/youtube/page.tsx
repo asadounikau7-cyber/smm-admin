@@ -4,7 +4,7 @@ import { db } from "@/lib/db";
 import { Empty, PageHeader, StatusBadge } from "@/components/ui";
 import { backlogDays, GEOS, getConveyorSettings, isGeo, testTimes } from "@/lib/conveyor";
 import { deleteTestUploadsAction, queueSeriesTestAction } from "@/app/testActions";
-import { studioEditUrl } from "@/lib/adapters/youtube";
+import { studioEditUrl, ytCanComment } from "@/lib/adapters/youtube";
 
 export const dynamic = "force-dynamic";
 
@@ -59,7 +59,10 @@ export default async function YouTubeConveyorPage() {
                   <td>{isGeo(c.geo) ? `${c.geo} · ${GEOS[c.geo].tz}` : <span className="text-amber-600">не задано</span>}</td>
                   <td>{c.role === "TEST" ? "Тестовый" : "Боевой"}</td>
                   <td className="muted">{c.octoProfile?.title ?? "—"}</td>
-                  <td>{c.status === "ACTIVE" ? "активен" : <span className="text-red-600">{c.status}</span>}</td>
+                  <td>
+                    {c.status === "ACTIVE" ? "активен" : <span className="text-red-600">{c.status}</span>}
+                    {c.role === "MAIN" && ytCanComment(c) === false && <div className="text-xs text-amber-600">комментарии: переподключить</div>}
+                  </td>
                   <td>
                     <details>
                       <summary className="cursor-pointer text-xs muted">Удалить тестовые ролики</summary>

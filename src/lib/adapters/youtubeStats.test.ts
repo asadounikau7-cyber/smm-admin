@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SocialAccount } from "@prisma/client";
 import { encryptJson } from "../crypto";
-import { ytChannelSnapshot } from "./youtube";
+import { ytCanComment, ytChannelSnapshot } from "./youtube";
 
 const account = { id: "x", handle: "x", credentials: encryptJson({ access_token: "t", refresh_token: "r", expires_at: Date.now() + 3600_000 }) } as unknown as SocialAccount;
 afterEach(() => vi.unstubAllGlobals());
@@ -24,5 +24,14 @@ describe("ytChannelSnapshot", () => {
     const s = await ytChannelSnapshot(account);
     expect(s).toMatchObject({ subscribers: 12, views: 340, videos: 3, likes: 14, comments: 1, publicVideos: 2 });
     expect(s.top).toEqual({ id: "b", title: "B", views: 240 });
+  });
+});
+
+describe("ytCanComment", () => {
+  const acc = (scope?: string) => ({ credentials: encryptJson({ access_token: "t", refresh_token: "r", expires_at: 0, scope }) }) as unknown as SocialAccount;
+  it("needs the force-ssl scope; unknown until a token refresh tells", () => {
+    expect(ytCanComment(acc())).toBeNull();
+    expect(ytCanComment(acc("https://www.googleapis.com/auth/youtube https://www.googleapis.com/auth/youtube.upload"))).toBe(false);
+    expect(ytCanComment(acc("https://www.googleapis.com/auth/youtube https://www.googleapis.com/auth/youtube.force-ssl"))).toBe(true);
   });
 });

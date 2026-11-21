@@ -12,9 +12,12 @@ export const YT_SCOPES = [
   "https://www.googleapis.com/auth/youtube.upload",
   "https://www.googleapis.com/auth/youtube.readonly",
   "https://www.googleapis.com/auth/youtube",
+  // Comments ("Part 2 →" under Part 1) need this one; channels connected before it was added must reconnect once.
+  "https://www.googleapis.com/auth/youtube.force-ssl",
 ];
+const COMMENT_SCOPE = "https://www.googleapis.com/auth/youtube.force-ssl";
 
-type YtCreds = { access_token: string; refresh_token: string; expires_at: number };
+type YtCreds = { access_token: string; refresh_token: string; expires_at: number; scope?: string };
 
 /** Uploads public videos this many hours ahead and lets YouTube publish them natively via publishAt. */
 const LEAD_HOURS = 6;
@@ -39,7 +42,7 @@ export async function ytAccessToken(account: SocialAccount): Promise<string> {
     if (j.error === "invalid_grant") throw new AdapterError("AUTH", "Доступ к YouTube отозван или истёк (invalid_grant)");
     throw new AdapterError("TRANSIENT", `Google token: ${JSON.stringify(j).slice(0, 200)}`);
   }
-  const next: YtCreds = { ...c, access_token: j.access_token, expires_at: Date.now() + j.expires_in * 1000 };
+  const next: YtCreds = { ...c, access_token: j.access_token, expires_at: Date.now() + j.expires_in * 1000, scope: j.scope ?? c.scope };
   await db.socialAccount.update({ where: { id: account.id }, data: { credentials: encryptJson(next), tokenExpiresAt: new Date(next.expires_at) } });
   return next.access_token;
 }
@@ -411,7 +414,7 @@ export async function googleExchange(code: string, verifier: string) {
   });
   const j = await res.json();
   if (!res.ok) throw new Error(`Google: ${JSON.stringify(j)}`);
-  const creds: YtCreds = { access_token: j.access_token, refresh_token: j.refresh_token, expires_at: Date.now() + j.expires_in * 1000 };
+  const creds: YtCreds = { access_token: j.access_token, refresh_token: j.refresh_token, expires_at: Date.now() + j.expires_in * 1000, scope: j.scope };
   const ch = await fetch("https://www.googleapis.com/youtube/v3/channels?part=id,snippet&mine=true", {
     headers: { authorization: `Bearer ${creds.access_token}` },
   }).then((r) => r.json());
@@ -610,4 +613,68 @@ export async function syncSeriesPlaylists(limit = 12) {
     }
   }
   return added;
+}
+
+/** Whether the channel's grant allows comments. null: not known yet (learned on the next token refresh). */
+export function ytCanComment(account: SocialAccount): boolean | null {
+  const c = decryptJson<YtCreds>(account.credentials);
+  if (!c?.scope) return null;
+  return c.scope.split(" ").includes(COMMENT_SCOPE);
+}
+
+/**
+ * "Part N+1 →" comment from the channel under Part N, once Part N+1 is public on the same main channel.
+ * Pinning isn't available in the API; the channel's own comment still shows with the creator badge.
+ * Adds a comment, doesn't change the video. At most `limit` comments per call (50 units each).
+ */
+export async function postNextPartComments(limit = 10) {
+  const jobs = await db.publicationJob.findMany({
+    where: {
+      platform: "YOUTUBE",
+      visibility: "PUBLIC",
+      status: "PUBLISHED",
+      externalId: { not: null },
+      account: { role: "MAIN", status: "ACTIVE" },
+      createdAt: { gt: new Date(Date.now() - 30 * 86400_000) },
+    },
+    include: { account: true, rule: { select: { seriesId: true } } },
+  });
+  const epIds = jobs.map((j) => (j.meta as Record<string, unknown> | null)?.episodeId).filter((x): x is string => typeof x === "string");
+  const eps = new Map((await db.episode.findMany({ where: { id: { in: epIds } }, select: { id: true, seriesId: true, season: true, number: true } })).map((e) => [e.id, e]));
+  const key = (acc: string, series: string, season: number, n: number) => `${acc}|${series}|${season}|${n}`;
+  const byKey = new Map<string, (typeof jobs)[number]>();
+  for (const j of jobs) {
+    const ep = eps.get(String((j.meta as Record<string, unknown> | null)?.episodeId));
+    if (ep) byKey.set(key(j.accountId, ep.seriesId, ep.season, ep.number), j);
+  }
+  const allowed = new Map<string, boolean>();
+  const posted: string[] = [];
+  for (const j of jobs) {
+    if (posted.length >= limit) break;
+    const meta = (j.meta ?? {}) as Record<string, unknown>;
+    if (meta.nextComment || meta.nextCommentError) continue;
+    const ep = eps.get(String(meta.episodeId));
+    if (!ep) continue;
+    const next = byKey.get(key(j.accountId, ep.seriesId, ep.season, ep.number + 1));
+    if (!next?.externalId) continue;
+    if (!allowed.has(j.accountId)) allowed.set(j.accountId, ytCanComment(j.account) === true);
+    if (!allowed.get(j.accountId)) continue;
+    const text = `Part ${ep.number + 1} → https://youtube.com/shorts/${next.externalId}`;
+    try {
+      const { body } = await api(j.account, "commentThreads?part=snippet", {
+        method: "POST",
+        body: JSON.stringify({ snippet: { videoId: j.externalId, topLevelComment: { snippet: { textOriginal: text } } } }),
+      });
+      await db.publicationJob.update({ where: { id: j.id }, data: { meta: { ...meta, nextComment: body.id ?? true } } });
+      posted.push(`@${j.account.handle} ${j.externalId}: ${text}`);
+    } catch (e) {
+      const msg = (e as Error).message;
+      console.warn(`[comments] ${j.externalId}: ${msg.slice(0, 200)}`);
+      if (/quota/i.test(msg)) break;
+      if (/insufficient|scope/i.test(msg)) { allowed.set(j.accountId, false); continue; }
+      // Comments turned off on the video, video gone, etc.: don't retry it every tick.
+      if (/403|forbidden|commentsDisabled|notFound|404/i.test(msg)) await db.publicationJob.update({ where: { id: j.id }, data: { meta: { ...meta, nextCommentError: msg.slice(0, 200) } } });
+    }
+  }
+  return posted;
 }
