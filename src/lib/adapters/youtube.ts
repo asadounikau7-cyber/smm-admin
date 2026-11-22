@@ -291,19 +291,27 @@ export const youtube: PlatformAdapter = {
     await resolveNotification(`studio:${job.id}`);
     if (!id) return; // nothing uploaded yet
     // Keep the uploaded file but make sure it never goes public.
+    // The whole status part is replaced, so leaving publishAt out clears the schedule.
+    let put: any;
     try {
-      await api(job.account, "videos?part=status", {
+      put = (await api(job.account, "videos?part=status", {
         method: "PUT",
-        body: JSON.stringify({ id, status: { privacyStatus: "private", publishAt: null, selfDeclaredMadeForKids: Boolean((job.meta as any)?.madeForKids) } }),
-      });
+        body: JSON.stringify({ id, status: { privacyStatus: "private", selfDeclaredMadeForKids: Boolean((job.meta as any)?.madeForKids) } }),
+      })).body;
     } catch (e) {
       // Deleted on YouTube (e.g. by hand in Studio): nothing left that could go public.
       if (/404|videoNotFound|cannot be found/i.test((e as Error).message)) return;
       throw e;
     }
+    const clean = (st: any) => st?.privacyStatus === "private" && !st.publishAt;
+    // The update's own answer is what YouTube kept; a separate read right after it often lags.
+    if (clean(put?.status)) return;
     const { body } = await api(job.account, `videos?part=status&id=${id}`);
     const st = body.items?.[0]?.status;
-    if (st && (st.privacyStatus !== "private" || st.publishAt)) throw new AdapterError("UNKNOWN_RESULT", "YouTube не подтвердил отмену");
+    if (!body.items?.length || clean(st)) return; // gone, or private with no schedule
+    // Still scheduled: try again shortly while the slot is ahead, hand to a person once it has passed.
+    if (job.scheduledAt.getTime() > Date.now() - 3600_000) throw new AdapterError("TRANSIENT", "YouTube ещё не подтвердил отмену, повторю");
+    throw new AdapterError("UNKNOWN_RESULT", "YouTube не подтвердил отмену");
   },
 
   async reschedule(job, state, at) {
