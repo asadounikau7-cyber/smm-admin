@@ -98,6 +98,8 @@ model Series {
   synopsis  String?
   /// YouTube title hook: the plot set-up in one line ("She Was Sold to the Mafia King—Now He Won't Let Her Go!")
   hookTitle String?
+  /// Why the series stays off main channels (e.g. an episode longer than a Short); null = may go to mains.
+  mainSkip  String?
   hashtags  String?
   /// Banned / Inactive: shown in red everywhere, excluded from plans and new versions
   bannedAt  DateTime?

@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
 import { DateTime } from "luxon";
-import type { SocialAccount } from "@prisma/client";
+import type { Episode, SocialAccount } from "@prisma/client";
 import { db } from "./db";
 import { notify } from "./notify";
-import { queueAt, startSeriesTest } from "./seriesTest";
+import { fmtLen, notAShort, queueAt, startSeriesTest } from "./seriesTest";
 import { adapterFor } from "./adapters";
 import { env } from "./env";
 import { toLocal } from "./time";
@@ -230,6 +230,12 @@ export async function enqueueMain(seriesId: string) {
   if (await alreadyOnMain(seriesId)) return [];
   const load = await Promise.all(mains.map(async (m) => ({ m, n: await db.channelQueueItem.count({ where: { accountId: m.id, jobId: null } }) })));
   const target = load.sort((x, y) => x.n - y.n)[0].m;
+  // Mains are Shorts channels: a series with an episode YouTube would make a regular video stays off them.
+  const long = await longEpisode(eps, target);
+  if (long) {
+    await db.series.update({ where: { id: seriesId }, data: { mainSkip: long } });
+    return [];
+  }
   const last = await db.channelQueueItem.findFirst({ where: { accountId: target.id }, orderBy: { position: "desc" } });
   let pos = (last?.position ?? 0) + 1;
   for (const ep of eps)
@@ -270,6 +276,37 @@ export async function rebalanceMain() {
     if (!didMove) break;
   }
   return moved;
+}
+
+async function longEpisode(eps: Episode[], account: SocialAccount) {
+  for (const ep of eps) {
+    const sec = await notAShort(ep, account);
+    if (sec !== null) return `Серия ${ep.number} длиннее Shorts (${fmtLen(sec)}): на боевые не идёт`;
+  }
+  return null;
+}
+
+/**
+ * Waiting series on main channels with an episode that would go out as a regular video instead of a
+ * Short (over 3 min): taken off the line while none of their episodes has been uploaded yet.
+ */
+export async function dropLongMain() {
+  const items = await db.channelQueueItem.findMany({ where: { account: { role: "MAIN" } }, include: { account: true, series: { select: { title: true } } }, orderBy: { position: "asc" } });
+  const eps = new Map((await db.episode.findMany({ where: { id: { in: items.map((i) => i.episodeId) } } })).map((e) => [e.id, e]));
+  const groups = new Map<string, typeof items>();
+  for (const i of items) groups.set(`${i.accountId}|${i.seriesId}`, [...(groups.get(`${i.accountId}|${i.seriesId}`) ?? []), i]);
+  const dropped: string[] = [];
+  for (const group of groups.values()) {
+    const jobs = (await Promise.all(group.map((i) => (i.jobId ? db.publicationJob.findUnique({ where: { id: i.jobId } }) : null)))).filter(Boolean);
+    if (jobs.some((j) => j!.externalId || !["QUEUED", "CANCELLED"].includes(j!.status))) continue; // already started going out
+    const long = await longEpisode(group.flatMap((i) => (eps.has(i.episodeId) ? [eps.get(i.episodeId)!] : [])), group[0].account);
+    if (!long) continue;
+    for (const j of jobs) if (j && j.status === "QUEUED") await db.publicationJob.update({ where: { id: j.id }, data: { status: "CANCELLED" } });
+    await db.channelQueueItem.deleteMany({ where: { id: { in: group.map((i) => i.id) } } });
+    await db.series.update({ where: { id: group[0].seriesId }, data: { mainSkip: long } });
+    dropped.push(`${group[0].series.title}: ${long}`);
+  }
+  return dropped;
 }
 
 /** A public upload of this series exists on some main channel outside the conveyor's queue. */
@@ -382,7 +419,7 @@ async function backfillMain() {
   if (!mains.length) return;
   const geos = [...new Set(mains.map((m) => m.geo as string))];
   const passed = await db.series.findMany({
-    where: { stage: "IN_WORK", bannedAt: null, allowedGeos: { hasSome: geos }, queueItems: { none: { account: { role: "MAIN" } } } },
+    where: { stage: "IN_WORK", bannedAt: null, mainSkip: null, allowedGeos: { hasSome: geos }, queueItems: { none: { account: { role: "MAIN" } } } },
     select: { id: true },
     // Oldest passes first.
     orderBy: { inWorkAt: "asc" },
@@ -423,6 +460,7 @@ export async function scheduleMain(now = new Date()) {
   if (!s.enabled) return [];
   await backfillMain();
   for (const t of await dropMainDuplicates()) console.log(`[conveyor] duplicate dropped: ${t}`);
+  for (const t of await dropLongMain()) console.log(`[conveyor] not a Short, dropped: ${t}`);
   await rebalanceMain();
   const pv = s.channelVersions ? await prepareChannelVersions() : { made: 0, attached: 0 };
   if (pv.made || pv.attached) console.log(`[conveyor] channel versions: ${pv.made} new, ${pv.attached} attached`);

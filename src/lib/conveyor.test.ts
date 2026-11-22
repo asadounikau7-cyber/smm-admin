@@ -7,7 +7,7 @@ import { DateTime } from "luxon";
 import { db } from "./db";
 import { encryptJson } from "./crypto";
 import { importRegistry, type Registry } from "./registry";
-import { DEFAULT_CONVEYOR, dropMainDuplicates, prepareChannelVersions, rebalanceMain, releaseTestsOnMainChannels, saveConveyorSettings, scheduleMain, scheduleTests, testTimes } from "./conveyor";
+import { DEFAULT_CONVEYOR, dropLongMain, dropMainDuplicates, enqueueMain, prepareChannelVersions, rebalanceMain, releaseTestsOnMainChannels, saveConveyorSettings, scheduleMain, scheduleTests, testTimes } from "./conveyor";
 import { checkSeriesTests, markTestPassed, saveYtTestSettings } from "./seriesTest";
 
 const SLUGS = ["conv-a", "conv-b", "conv-c", "conv-d", "conv-e"];
@@ -261,6 +261,24 @@ describe("YouTube conveyor", () => {
     await db.videoVariant.deleteMany({ where: { accountId: ids.cv_m_us } });
     await db.socialAccount.update({ where: { id: ids.cv_m_us }, data: { editTemplateId: null } });
     await db.editTemplate.delete({ where: { id: tpl.id } });
+  });
+
+  it("a series with an episode over 3 min (not a Short) stays off main channels", async () => {
+    const e = ids["conv-e"];
+    await db.series.update({ where: { id: e }, data: { allowedGeos: ["US"], mainSkip: null } });
+    const ep2 = await db.episode.findFirstOrThrow({ where: { seriesId: e, number: 2 } });
+    await db.assetVersion.updateMany({ where: { asset: { episodeId: ep2.id } }, data: { durationSec: 222 } });
+    await db.channelQueueItem.deleteMany({ where: { seriesId: e } });
+    expect(await enqueueMain(e)).toEqual([]);
+    expect((await db.series.findUniqueOrThrow({ where: { id: e } })).mainSkip).toContain("3:42");
+    // Already lined up before the check existed: taken off while nothing has been uploaded.
+    await db.series.update({ where: { id: e }, data: { mainSkip: null } });
+    const eps = await db.episode.findMany({ where: { seriesId: e }, orderBy: { number: "asc" }, take: 3 });
+    for (const [n, ep] of eps.entries()) await db.channelQueueItem.create({ data: { accountId: ids.cv_m_us, seriesId: e, episodeId: ep.id, position: 950 + n } });
+    expect((await dropLongMain()).some((t) => t.startsWith("Conv conv-e"))).toBe(true);
+    expect(await db.channelQueueItem.count({ where: { seriesId: e } })).toBe(0);
+    expect((await db.series.findUniqueOrThrow({ where: { id: e } })).mainSkip).toContain("Серия 2");
+    await db.assetVersion.updateMany({ where: { asset: { episodeId: ep2.id } }, data: { durationSec: 60 } });
   });
 
   it("jitter never puts a test before 09:00", () => {

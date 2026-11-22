@@ -69,6 +69,15 @@ function ytFormat(v: AssetVersion): PostFormat {
   return vertical && (v.durationSec ?? 0) <= VALIDATORS.YT_SHORT.maxSec ? "YT_SHORT" : "YT_VIDEO";
 }
 
+/** Seconds of the episode's file for this channel when it can't be a Short (over 3 min or horizontal); null when it can. */
+export async function notAShort(ep: Episode, account: SocialAccount): Promise<number | null> {
+  const file = await fileFor(ep, account);
+  if (!file || file.version.probeError) return null;
+  return ytFormat(file.version) === "YT_VIDEO" ? Math.round(file.version.durationSec ?? 0) : null;
+}
+
+export const fmtLen = (sec: number) => `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}`;
+
 const epLabel = (ep: Episode) => `S${String(ep.season).padStart(2, "0")}E${String(ep.number).padStart(2, "0")}`;
 
 export type JobInput = {
@@ -151,6 +160,11 @@ export async function startSeriesTest(input: {
   const ep = input.episode ? series.episodes.find((e) => e.season === 1 && e.number === input.episode) : series.episodes[0];
   if (!ep) throw new Error(input.episode ? `Нет серии ${input.episode}` : "В сериале нет серий");
   const account = await db.socialAccount.findUniqueOrThrow({ where: { id: input.testAccountId } });
+  // The conveyor only tests what can go out as Shorts: YouTube makes anything over 3 min a regular video.
+  if (input.at) {
+    const long = await notAShort(ep, account);
+    if (long !== null) throw new Error(`${epLabel(ep)} не подходит для Shorts (${fmtLen(long)}, нужно до 3:00)`);
+  }
   const settings = await getYtTestSettings();
 
   const job = await queueAt(
