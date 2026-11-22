@@ -291,10 +291,16 @@ export const youtube: PlatformAdapter = {
     await resolveNotification(`studio:${job.id}`);
     if (!id) return; // nothing uploaded yet
     // Keep the uploaded file but make sure it never goes public.
-    await api(job.account, "videos?part=status", {
-      method: "PUT",
-      body: JSON.stringify({ id, status: { privacyStatus: "private", publishAt: null, selfDeclaredMadeForKids: Boolean((job.meta as any)?.madeForKids) } }),
-    });
+    try {
+      await api(job.account, "videos?part=status", {
+        method: "PUT",
+        body: JSON.stringify({ id, status: { privacyStatus: "private", publishAt: null, selfDeclaredMadeForKids: Boolean((job.meta as any)?.madeForKids) } }),
+      });
+    } catch (e) {
+      // Deleted on YouTube (e.g. by hand in Studio): nothing left that could go public.
+      if (/404|videoNotFound|cannot be found/i.test((e as Error).message)) return;
+      throw e;
+    }
     const { body } = await api(job.account, `videos?part=status&id=${id}`);
     const st = body.items?.[0]?.status;
     if (st && (st.privacyStatus !== "private" || st.publishAt)) throw new AdapterError("UNKNOWN_RESULT", "YouTube не подтвердил отмену");
