@@ -39,6 +39,12 @@ export type ConveyorSettings = {
   backlogDays: number;
   /** Uniqueization: main channels with an edit template publish their own rendered version */
   channelVersions: boolean;
+  /** Films (whole series as one video): channels that publish them, one a day each; empty = off */
+  filmAccountIds: string[];
+  /** Test channel where films are checked privately first */
+  filmTestAccountId: string | null;
+  /** Local time of the daily film */
+  filmSlot: string;
 };
 
 export const DEFAULT_CONVEYOR: ConveyorSettings = {
@@ -50,6 +56,9 @@ export const DEFAULT_CONVEYOR: ConveyorSettings = {
   mainEpisodes: 3,
   backlogDays: 7,
   channelVersions: false,
+  filmAccountIds: [],
+  filmTestAccountId: null,
+  filmSlot: "19:30",
 };
 
 /** Test channels of one geo are shifted against each other so two never upload within half an hour. */

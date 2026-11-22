@@ -5,6 +5,7 @@ import { adapterFor } from "@/lib/adapters";
 import { igRefresh } from "@/lib/adapters/instagram";
 import { collectChannelStats, postNextPartComments, refreshYoutubeMeta, syncSeriesPlaylists } from "@/lib/adapters/youtube";
 import { claim, runCancel, runJob } from "@/lib/runner";
+import { runFilms } from "@/lib/films";
 import { flushEmails, notify } from "@/lib/notify";
 import { loadIntegrationKeys } from "@/lib/integrationKeys";
 import { checkSeriesTests, recheckPassedSeries } from "@/lib/seriesTest";
@@ -109,6 +110,7 @@ async function maybeRender() {
 let lastRecheck = 0;
 let lastStats = 0;
 let lastPlaylists = 0;
+let lastFilms = 0;
 
 async function tick() {
   await heartbeat();
@@ -141,6 +143,10 @@ async function tick() {
     lastPlaylists = Date.now();
     for (const t of await syncSeriesPlaylists().catch((e) => (console.error("[playlists]", e), [] as string[]))) console.log(`[playlists] ${t}`);
     for (const t of await postNextPartComments().catch((e) => (console.error("[comments]", e), [] as string[]))) console.log(`[comments] ${t}`);
+  }
+  if (Date.now() - lastFilms > 5 * 60_000) {
+    lastFilms = Date.now();
+    for (const t of await runFilms().catch((e) => (console.error("[films]", e), [] as string[]))) console.log(`[films] ${t}`);
   }
   await maybeRender();
   await flushEmails().catch((e) => console.error("[mail]", e));

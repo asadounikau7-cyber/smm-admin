@@ -120,6 +120,7 @@ model Series {
   /// Geos (US, UK) where the test video was not blocked; main channels of these geos get the series
   allowedGeos   String[]  @default([])
   queueItems    ChannelQueueItem[]
+  compilation   Compilation?
   createdAt DateTime  @default(now())
   episodes  Episode[]
   assets    Asset[]
@@ -530,3 +531,35 @@ model ChannelPlaylist {
   @@unique([accountId, seriesId])
 }
 
+
+enum CompilationStatus {
+  QUEUED
+  BUILDING
+  READY
+  TESTING
+  PASSED
+  FAILED
+  SCHEDULED
+  PUBLISHED
+}
+
+/// A whole series as one long video ("film"): built from all episodes, tested privately, published as a regular video.
+model Compilation {
+  id             String            @id @default(cuid())
+  seriesId       String            @unique
+  series         Series            @relation(fields: [seriesId], references: [id], onDelete: Cascade)
+  status         CompilationStatus @default(QUEUED)
+  episodes       Int               @default(0)
+  durationSec    Float?
+  /// [{season, number, at}] start of each episode in seconds
+  chapters       Json?
+  assetVersionId String?
+  testJobId      String?
+  mainJobId      String?
+  accountId      String?
+  note           String?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  @@index([status])
+}

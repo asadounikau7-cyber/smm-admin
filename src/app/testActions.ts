@@ -122,6 +122,7 @@ export async function saveConveyorSettingsAction(f: FormData) {
     return Number.isFinite(n) && s(f, k) !== "" ? Math.max(min, Math.min(max, Math.round(n))) : def;
   };
   const v = {
+    ...cur,
     enabled: f.get("enabled") === "on",
     autoPick: f.get("autoPick") === "on",
     testSlots: times(s(f, "testSlots")),
@@ -184,4 +185,30 @@ export async function saveHooksAction(f: FormData) {
   await audit("series.hooks.saved", "Series", null, u.id, { count: n });
   revalidatePath("/hooks");
   redirect(`/hooks?ok=${encodeURIComponent(`Сохранено: ${n}`)}`);
+}
+
+export async function saveFilmSettingsAction(f: FormData) {
+  const u = await requireOwner();
+  const cur = await getConveyorSettings();
+  const slot = s(f, "filmSlot");
+  if (!/^\d{1,2}:\d{2}$/.test(slot)) redirect("/films?err=" + encodeURIComponent("Время в формате 19:30"));
+  const v = {
+    ...cur,
+    filmTestAccountId: s(f, "filmTestAccountId") || null,
+    filmAccountIds: f.getAll("filmAccountIds").filter((x): x is string => typeof x === "string" && x !== ""),
+    filmSlot: slot.padStart(5, "0"),
+  };
+  await saveConveyorSettings(v);
+  await audit("settings.films", "Setting", "ytConveyor", u.id, { filmTestAccountId: v.filmTestAccountId, filmAccountIds: v.filmAccountIds, filmSlot: v.filmSlot });
+  revalidatePath("/films");
+  redirect("/films?ok=" + encodeURIComponent(v.filmTestAccountId && v.filmAccountIds.length ? "Фильмы включены" : "Сохранено (фильмы выключены)"));
+}
+
+export async function retryFilmAction(f: FormData) {
+  const u = await requireUser();
+  const id = s(f, "id");
+  await db.compilation.update({ where: { id }, data: { status: "QUEUED", note: "Повторная сборка", testJobId: null, mainJobId: null, accountId: null } });
+  await audit("film.retry", "Compilation", id, u.id, {});
+  revalidatePath("/films");
+  redirect("/films?ok=" + encodeURIComponent("Поставлен на повторную сборку"));
 }

@@ -9,6 +9,7 @@ const ITEMS = [
   { href: "/youtube", label: "YouTube-конвейер" },
   { href: "/stats", label: "Статистика" },
   { href: "/hooks", label: "Завязки" },
+  { href: "/films", label: "Фильмы" },
   { href: "/catalog", label: "Каталог" },
   { href: "/variants", label: "Версии" },
   { href: "/templates", label: "Шаблоны" },
