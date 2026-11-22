@@ -24,8 +24,8 @@ import { audit } from "./audit";
 
 /** Minutes a private film must stay clean after YouTube processed it. */
 const FILM_WAIT_MIN = 60;
-/** Films waiting (built, in test or passed) beyond what's scheduled; building pauses above this. */
-const FILM_PIPELINE_MAX = 3;
+/** Films waiting (built, in test or passed) per film channel beyond what's scheduled; building pauses above this. */
+const FILM_PIPELINE_PER_CHANNEL = 2;
 /** Films planned ahead per channel. */
 const FILM_DAYS_AHEAD = 2;
 const BUILD_TIMEOUT_MS = 3 * 3600_000;
@@ -77,14 +77,15 @@ export async function filmAccounts() {
 
 /** Series that need a film: in work, kept off Shorts channels because an episode is too long. */
 export async function queueFilms() {
-  const { test, mains } = await filmAccounts();
-  if (!test || !mains.length) return 0;
+  const { mains } = await filmAccounts();
+  if (!mains.length) return 0;
+  const max = FILM_PIPELINE_PER_CHANNEL * mains.length;
   const active = await db.compilation.count({ where: { status: { in: ["QUEUED", "BUILDING", "READY", "TESTING", "PASSED"] } } });
-  if (active >= FILM_PIPELINE_MAX) return 0;
+  if (active >= max) return 0;
   const next = await db.series.findMany({
     where: { stage: "IN_WORK", bannedAt: null, mainSkip: { not: null }, compilation: null },
     orderBy: { inWorkAt: "asc" },
-    take: FILM_PIPELINE_MAX - active,
+    take: max - active,
     select: { id: true },
   });
   for (const s of next) await db.compilation.create({ data: { seriesId: s.id } });
@@ -247,14 +248,19 @@ async function createJob(comp: Compilation & { series: Series }, account: Social
 
 /** Built films go to the test channel privately; tested ones get a verdict after the wait. */
 export async function testFilms(now = new Date()) {
-  const { test } = await filmAccounts();
+  const { test, mains } = await filmAccounts();
   const events: string[] = [];
-  if (test) {
-    for (const comp of await db.compilation.findMany({ where: { status: "READY" }, include: { series: true } })) {
-      const job = await createJob(comp, test, "PRIVATE", new Date(now.getTime() + 60_000), "film-test");
-      await db.compilation.update({ where: { id: comp.id }, data: { status: "TESTING", testJobId: job.id, note: `Закрытый тест на @${test.handle}` } });
-      events.push(`test ${comp.series.title} → @${test.handle}`);
-    }
+  for (const comp of await db.compilation.findMany({ where: { status: "READY" }, include: { series: true } })) {
+    // Without a test channel the film is checked privately on the film channel it will come out on,
+    // and that same upload is published after the check (no second upload).
+    const target = test ?? (await leastBusy(mains));
+    if (!target) break;
+    const job = await createJob(comp, target, "PRIVATE", new Date(now.getTime() + 60_000), "film-test");
+    await db.compilation.update({
+      where: { id: comp.id },
+      data: { status: "TESTING", testJobId: job.id, accountId: test ? null : target.id, note: `Закрытый тест на @${target.handle}` },
+    });
+    events.push(`test ${comp.series.title} → @${target.handle}`);
   }
   for (const comp of await db.compilation.findMany({ where: { status: "TESTING" }, include: { series: true } })) {
     const job = comp.testJobId ? await db.publicationJob.findUnique({ where: { id: comp.testJobId }, include: { account: true } }) : null;
@@ -278,6 +284,14 @@ export async function testFilms(now = new Date()) {
     events.push(`passed ${comp.series.title}`);
   }
   return events;
+}
+
+/** The film channel with the fewest films in the works. */
+async function leastBusy(mains: SocialAccount[]) {
+  const load = await Promise.all(
+    mains.map(async (m) => ({ m, n: await db.compilation.count({ where: { accountId: m.id, status: { in: ["TESTING", "PASSED", "SCHEDULED"] } } }) })),
+  );
+  return load.sort((a, b) => a.n - b.n)[0]?.m ?? null;
 }
 
 async function fail(comp: Compilation & { series: Series }, note: string) {
@@ -306,17 +320,43 @@ export async function scheduleFilms(now = new Date()) {
       // Far enough ahead to upload a big file before the slot.
       if (slot.getTime() < now.getTime() + 3 * 3600_000) continue;
       const taken = await db.publicationJob.findFirst({
-        where: { accountId: account.id, status: { not: "CANCELLED" }, instanceKey: { startsWith: "film:" }, scheduledAt: { gte: day.toJSDate(), lt: day.plus({ days: 1 }).toJSDate() } },
+        where: { accountId: account.id, status: { not: "CANCELLED" }, visibility: "PUBLIC", instanceKey: { startsWith: "film" }, scheduledAt: { gte: day.toJSDate(), lt: day.plus({ days: 1 }).toJSDate() } },
       });
       if (taken) continue;
-      const comp = await db.compilation.findFirst({ where: { status: "PASSED" }, orderBy: { updatedAt: "asc" }, include: { series: true } });
-      if (!comp) return planned;
-      const job = await createJob(comp, account, "PUBLIC", slot, "film");
+      const comp = await db.compilation.findFirst({
+        where: { status: "PASSED", OR: [{ accountId: null }, { accountId: account.id }] },
+        orderBy: { updatedAt: "asc" },
+        include: { series: true },
+      });
+      if (!comp) break;
+      const job = comp.accountId ? await publishTested(comp, slot, tz) : await createJob(comp, account, "PUBLIC", slot, "film");
       await db.compilation.update({ where: { id: comp.id }, data: { status: "SCHEDULED", mainJobId: job.id, accountId: account.id, note: `Выйдет на @${account.handle} ${toLocal(slot, tz, "dd.MM HH:mm")}` } });
       planned.push(`${comp.series.title} → @${account.handle} ${slot.toISOString()}`);
     }
   }
   return planned;
+}
+
+/**
+ * A film tested privately on its own channel: the same video gets the slot. The job turns public and
+ * the YouTube step sets publishAt on the video, then follows it until it is open, like any main upload.
+ */
+async function publishTested(comp: Compilation, slot: Date, tz: string) {
+  const job = await db.publicationJob.findUniqueOrThrow({ where: { id: comp.testJobId! } });
+  const meta = (job.meta ?? {}) as Record<string, any>;
+  return db.publicationJob.update({
+    where: { id: job.id },
+    data: {
+      visibility: "PUBLIC",
+      status: "PROCESSING",
+      scheduledAt: slot,
+      localTime: toLocal(slot, tz),
+      timezone: tz,
+      deadlineAt: new Date(slot.getTime() + 12 * 3600_000),
+      nextAttemptAt: new Date(),
+      meta: { ...meta, purpose: "film", adapter: { ...(meta.adapter ?? {}), scheduledNatively: true } },
+    },
+  });
 }
 
 /** Scheduled films whose video went out are marked published and their file is freed. */
@@ -334,8 +374,8 @@ export async function settleFilms() {
 }
 
 export async function runFilms(now = new Date()) {
-  const { test, mains } = await filmAccounts();
-  if (!test || !mains.length) return [];
+  const { mains } = await filmAccounts();
+  if (!mains.length) return [];
   const out: string[] = [];
   const q = await queueFilms();
   if (q) out.push(`queued ${q}`);

@@ -8,7 +8,7 @@ import { run } from "./media";
 const dir = await mkdtemp(path.join(tmpdir(), "films-"));
 process.env.RENDERS_DIR = path.join(dir, "renders");
 const { db } = await import("./db");
-const { buildFilm, filmMeta, clock, scheduleFilms, settleFilms } = await import("./films");
+const { buildFilm, filmMeta, clock, scheduleFilms, settleFilms, testFilms } = await import("./films");
 const { encryptJson } = await import("./crypto");
 const { DEFAULT_CONVEYOR, saveConveyorSettings } = await import("./conveyor");
 
@@ -92,6 +92,37 @@ describe("films", () => {
     await db.publicationJob.update({ where: { id: job.id }, data: { status: "PUBLISHED", externalId: "vid1" } });
     await settleFilms();
     expect((await db.compilation.findUniqueOrThrow({ where: { seriesId } })).status).toBe("PUBLISHED");
+  });
+
+  it("without a test channel the film is tested on its own channel and that same upload gets the slot", async () => {
+    const acc = await db.socialAccount.findUniqueOrThrow({ where: { platform_externalId: { platform: "YOUTUBE", externalId: EXT } } });
+    await saveConveyorSettings({ ...DEFAULT_CONVEYOR, filmAccountIds: [acc.id], filmTestAccountId: null, filmSlot: "19:30" });
+    const comp0 = await db.compilation.findUniqueOrThrow({ where: { seriesId } });
+    await db.compilation.update({ where: { id: comp0.id }, data: { status: "READY", mainJobId: null, accountId: null, testJobId: null } });
+    const now = new Date("2026-12-03T15:00:00Z");
+    expect(await testFilms(now)).toEqual([`test Film Test → @${EXT}`]);
+    let comp = await db.compilation.findUniqueOrThrow({ where: { id: comp0.id } });
+    expect(comp.accountId).toBe(acc.id);
+    const test = await db.publicationJob.findUniqueOrThrow({ where: { id: comp.testJobId! } });
+    expect(test.visibility).toBe("PRIVATE");
+    expect(test.accountId).toBe(acc.id);
+    // Uploaded and clean (the verdict itself needs YouTube; here it is given).
+    await db.publicationJob.update({ where: { id: test.id }, data: { status: "PUBLISHED", externalId: "vid2" } });
+    await db.compilation.update({ where: { id: comp.id }, data: { status: "PASSED" } });
+    expect(await scheduleFilms(now)).toHaveLength(1);
+    comp = await db.compilation.findUniqueOrThrow({ where: { id: comp0.id } });
+    expect(comp.status).toBe("SCHEDULED");
+    expect(comp.mainJobId).toBe(test.id);
+    const job = await db.publicationJob.findUniqueOrThrow({ where: { id: test.id } });
+    expect(job.visibility).toBe("PUBLIC");
+    expect(job.status).toBe("PROCESSING");
+    expect(job.externalId).toBe("vid2");
+    expect(job.scheduledAt.toISOString()).toBe("2026-12-04T00:30:00.000Z");
+    expect((job.meta as any).adapter.scheduledNatively).toBe(true);
+    // That day is taken now.
+    await db.compilation.update({ where: { id: comp.id }, data: { status: "PASSED" } });
+    const again = await scheduleFilms(now);
+    expect(again.every((t) => !t.includes("2026-12-04T00:30"))).toBe(true);
   });
 
   it("title says full series and the description carries the chapters", () => {

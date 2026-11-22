@@ -201,7 +201,7 @@ export async function saveFilmSettingsAction(f: FormData) {
   await saveConveyorSettings(v);
   await audit("settings.films", "Setting", "ytConveyor", u.id, { filmTestAccountId: v.filmTestAccountId, filmAccountIds: v.filmAccountIds, filmSlot: v.filmSlot });
   revalidatePath("/films");
-  redirect("/films?ok=" + encodeURIComponent(v.filmTestAccountId && v.filmAccountIds.length ? "Фильмы включены" : "Сохранено (фильмы выключены)"));
+  redirect("/films?ok=" + encodeURIComponent(v.filmAccountIds.length ? "Фильмы включены" : "Сохранено (фильмы выключены)"));
 }
 
 export async function retryFilmAction(f: FormData) {

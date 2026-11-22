@@ -27,7 +27,7 @@ export default async function FilmsPage({ searchParams }: { searchParams: Promis
   const jobIds = films.flatMap((f) => [f.testJobId, f.mainJobId]).filter(Boolean) as string[];
   const jobs = new Map((await db.publicationJob.findMany({ where: { id: { in: jobIds } }, select: { id: true, externalUrl: true, scheduledAt: true, status: true } })).map((j) => [j.id, j]));
   const waiting = await db.series.count({ where: { stage: "IN_WORK", bannedAt: null, mainSkip: { not: null }, compilation: null } });
-  const on = Boolean(s.filmTestAccountId && s.filmAccountIds.length);
+  const on = s.filmAccountIds.length > 0;
 
   return (
     <div className="max-w-5xl space-y-6">
@@ -41,10 +41,10 @@ export default async function FilmsPage({ searchParams }: { searchParams: Promis
       </p>
 
       <form action={saveFilmSettingsAction} className="card space-y-3 p-4 text-sm">
-        <div className="font-medium">{on ? <span className="text-green-600">Включено</span> : <span className="text-amber-600">Выключено</span>}: выберите тестовый канал и каналы для фильмов</div>
+        <div className="font-medium">{on ? <span className="text-green-600">Включено</span> : <span className="text-amber-600">Выключено</span>}: отметьте каналы для фильмов</div>
         <label className="block">Тестовый канал (закрытая проверка)
           <select name="filmTestAccountId" defaultValue={s.filmTestAccountId ?? ""} className="input ml-2">
-            <option value="">— нет —</option>
+            <option value="">— нет: тест закрыто на самом канале фильмов —</option>
             {channels.filter((c) => c.role === "TEST").map((c) => <option key={c.id} value={c.id}>@{c.handle}</option>)}
           </select>
         </label>
