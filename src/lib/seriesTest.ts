@@ -411,8 +411,20 @@ export async function guardMainUploads(now = new Date()) {
     done.add(`${job.accountId}|${meta.seriesId}`);
     const ep = await db.episode.findUnique({ where: { id: meta.episodeId } });
     // Every episode of this series on this channel that isn't public yet: uploaded ones stay private, the rest are cancelled.
-    const siblings = await db.publicationJob.findMany({
-      where: { accountId: job.accountId, visibility: "PUBLIC", status: { in: ["QUEUED", "SENT", "PROCESSING"] }, meta: { path: ["seriesId"], equals: meta.seriesId } },
+    // Only this episode and the ones after it, and only those whose slot is still ahead: an earlier
+    // episode that is (or is just becoming) public stays as it is.
+    const candidates = await db.publicationJob.findMany({
+      where: {
+        accountId: job.accountId, visibility: "PUBLIC", status: { in: ["QUEUED", "SENT", "PROCESSING"] }, meta: { path: ["seriesId"], equals: meta.seriesId },
+        scheduledAt: { gt: new Date(now.getTime() + 5 * 60_000) },
+      },
+    });
+    const epOf = new Map(
+      (await db.episode.findMany({ where: { id: { in: candidates.map((j) => (j.meta as { episodeId?: string }).episodeId ?? "") } } })).map((e) => [e.id, e]),
+    );
+    const siblings = candidates.filter((j) => {
+      const e = epOf.get((j.meta as { episodeId?: string }).episodeId ?? "");
+      return j.id === job.id || (e && ep && (e.season > ep.season || (e.season === ep.season && e.number >= ep.number)));
     });
     for (const j of siblings) await db.publicationJob.update({ where: { id: j.id }, data: { status: j.externalId ? "CANCEL_PENDING" : "CANCELLED", nextAttemptAt: null } });
     await db.channelQueueItem.deleteMany({ where: { accountId: job.accountId, seriesId: meta.seriesId, OR: [{ jobId: null }, { jobId: { in: siblings.map((j) => j.id) } }] } });

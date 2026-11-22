@@ -321,7 +321,8 @@ describe("YouTube conveyor", () => {
           meta: { seriesId: d, episodeId: eps[n].id },
         },
       });
-    const j = [await mk(0, "PUBLISHED", "g_ok"), await mk(1, "PROCESSING", "g_bad"), await mk(2, "QUEUED", null)];
+    // Part 1 is at its slot (still "processing" here while it opens): it must be left alone.
+    const j = [await mk(0, "PROCESSING", "g_ok"), await mk(1, "PROCESSING", "g_bad"), await mk(2, "QUEUED", null)];
     for (const [n, job] of j.entries()) await db.channelQueueItem.create({ data: { accountId: ids.cv_m_us, seriesId: d, episodeId: eps[n].id, position: 970 + n, jobId: job.id } });
     vi.stubGlobal("fetch", async (url: string) => {
       const bad = String(url).includes("g_bad");
@@ -331,8 +332,8 @@ describe("YouTube conveyor", () => {
     expect(stopped).toHaveLength(1);
     expect(stopped[0]).toContain("серия 2");
     const st = await db.publicationJob.findMany({ where: { id: { in: j.map((x) => x.id) } }, orderBy: { scheduledAt: "asc" } });
-    expect(st.map((x) => x.status)).toEqual(["PUBLISHED", "CANCEL_PENDING", "CANCELLED"]);
-    expect(await db.channelQueueItem.count({ where: { seriesId: d } })).toBe(1); // the published one stays on record
+    expect(st.map((x) => x.status)).toEqual(["PROCESSING", "CANCEL_PENDING", "CANCELLED"]);
+    expect(await db.channelQueueItem.count({ where: { seriesId: d } })).toBe(1); // Part 1 stays in the line
     expect((await db.series.findUniqueOrThrow({ where: { id: d } })).stage).toBe("TEST_FAILED");
     await db.publicationJob.deleteMany({ where: { id: { in: j.map((x) => x.id) } } });
   });
