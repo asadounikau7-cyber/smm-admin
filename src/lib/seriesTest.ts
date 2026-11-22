@@ -160,31 +160,37 @@ export async function startSeriesTest(input: {
   const ep = input.episode ? series.episodes.find((e) => e.season === 1 && e.number === input.episode) : series.episodes[0];
   if (!ep) throw new Error(input.episode ? `Нет серии ${input.episode}` : "В сериале нет серий");
   const account = await db.socialAccount.findUniqueOrThrow({ where: { id: input.testAccountId } });
-  // The conveyor only tests what can go out as Shorts: YouTube makes anything over 3 min a regular video.
-  if (input.at) {
-    const long = await notAShort(ep, account);
-    if (long !== null) throw new Error(`${epLabel(ep)} не подходит для Shorts (${fmtLen(long)}, нужно до 3:00)`);
-  }
   const settings = await getYtTestSettings();
-
-  const job = await queueAt(
-    {
-      series,
-      ep,
-      account,
-      visibility: settings.visibility,
-      instanceKey: `test:${series.id}:${Date.now()}`,
-      meta: { purpose: "test", launchAccountId: input.launchAccountId, conveyor: Boolean(input.at) },
-    },
-    input.at,
-    input.tz,
-  );
+  // The conveyor tests every episode that will go to a main channel: Content ID can sit on episode 2
+  // of a series whose episode 1 is clean. A manual test checks the one episode asked for.
+  const eps = input.at ? series.episodes.slice(0, Math.max(1, (await getConveyorSettings()).mainEpisodes)) : [ep];
+  const run = `${series.id}:${Date.now()}`;
+  const jobs = [];
+  for (const [n, e] of eps.entries()) {
+    const at = input.at ? new Date(input.at.getTime() + n * 2 * 60_000) : undefined;
+    jobs.push(
+      await queueAt(
+        {
+          series,
+          ep: e,
+          account,
+          visibility: settings.visibility,
+          instanceKey: n ? `test:${run}:e${e.number}` : `test:${run}`,
+          meta: { purpose: "test", launchAccountId: input.launchAccountId, conveyor: Boolean(input.at), testRun: run },
+        },
+        at,
+        input.tz,
+      ),
+    );
+  }
+  const job = jobs[0];
   const when = input.at ? `в ${toLocal(input.at, input.tz ?? env().BASE_TIMEZONE, "HH:mm")} (${input.tz ?? env().BASE_TIMEZONE})` : "сейчас";
+  const what = eps.length > 1 ? `Серии 1–${eps.length}` : epLabel(ep);
   await db.series.update({
     where: { id: series.id },
-    data: { stage: "TESTING", testJobId: job.id, testNote: `${epLabel(ep)} грузится на @${account.handle} ${when}`, testLiveAt: null, testCheckedAt: null, testQueuedAt: null },
+    data: { stage: "TESTING", testJobId: job.id, testNote: `${what} грузятся на @${account.handle} ${when}`, testLiveAt: null, testCheckedAt: null, testQueuedAt: null },
   });
-  await audit("series.test.start", "Series", series.id, input.userId ?? null, { jobId: job.id, account: account.handle, episode: epLabel(ep) });
+  await audit("series.test.start", "Series", series.id, input.userId ?? null, { jobIds: jobs.map((j) => j.id), account: account.handle, episodes: eps.map(epLabel) });
   return job;
 }
 
@@ -234,6 +240,11 @@ export async function markTestPassed(seriesId: string, note: string, userId?: st
 
 export async function markTestFailed(seriesId: string, note: string, userId?: string | null) {
   const series = await db.series.update({ where: { id: seriesId }, data: { stage: "TEST_FAILED", testNote: note } });
+  // Episodes of the same test that haven't gone up yet are not needed any more.
+  await db.publicationJob.updateMany({
+    where: { status: "QUEUED", externalId: null, AND: [{ meta: { path: ["seriesId"], equals: seriesId } }, { meta: { path: ["purpose"], equals: "test" } }] },
+    data: { status: "CANCELLED" },
+  });
   await audit("series.test.failed", "Series", seriesId, userId ?? null, { note });
   await notify(`series-test:${seriesId}`, "series-test", `«${series.title}» не прошёл тест на YouTube: ${note.slice(0, 150)}`, `/catalog?series=${seriesId}`);
 }
@@ -251,51 +262,74 @@ export async function checkSeriesTests() {
   }
 }
 
+/** All uploads of one test (the conveyor sends several episodes), episode order. */
+async function testRunJobs(testJobId: string) {
+  const first = await db.publicationJob.findUnique({ where: { id: testJobId }, include: { account: true } });
+  if (!first) return [];
+  const run = (first.meta as { testRun?: string } | null)?.testRun;
+  if (!run) return [first];
+  return db.publicationJob.findMany({ where: { meta: { path: ["testRun"], equals: run } }, include: { account: true }, orderBy: { scheduledAt: "asc" } });
+}
+
+const jobEp = async (jobId: string) => {
+  const j = await db.publicationJob.findUnique({ where: { id: jobId }, select: { meta: true } });
+  const id = (j?.meta as { episodeId?: string } | null)?.episodeId;
+  const ep = id ? await db.episode.findUnique({ where: { id } }) : null;
+  return ep ? `серия ${ep.number}` : "серия";
+};
+
 async function checkOne(s: Series, settings: YtTestSettings) {
-  const job = s.testJobId ? await db.publicationJob.findUnique({ where: { id: s.testJobId }, include: { account: true } }) : null;
-  if (!job) return markTestFailed(s.id, "Тестовая публикация пропала");
+  const jobs = s.testJobId ? await testRunJobs(s.testJobId) : [];
+  if (!jobs.length) return markTestFailed(s.id, "Тестовая публикация пропала");
   const setNote = (testNote: string, extra: object = {}) => db.series.update({ where: { id: s.id }, data: { testNote, ...extra } });
+  const many = jobs.length > 1;
+  const label = async (id: string) => (many ? `${await jobEp(id)}: ` : "");
 
-  switch (job.status) {
-    case "QUEUED":
-    case "SENT":
-    case "PROCESSING":
-      if (job.externalId) await setNote(`Загружено на @${job.account.handle}, YouTube обрабатывает`);
-      return;
-    case "CANCELLED":
-      await db.series.update({ where: { id: s.id }, data: { stage: "NEW", testNote: "Тест отменён" } });
-      return;
-    case "ACTION_REQUIRED":
-    case "FAILED":
-    case "UNKNOWN":
-      if (job.errorCode === "MODERATION") return markTestFailed(s.id, job.errorMessage ?? "YouTube отклонил ролик");
-      // Our side (token, file, network): not a verdict on the series.
-      await setNote(`Загрузка не удалась: ${job.errorMessage ?? job.errorCode ?? "ошибка"}. Исправьте и нажмите «Повторить» в публикации`);
-      return;
-    case "PUBLISHED":
-      break;
-    default:
-      return;
+  if (jobs.some((j) => j.status === "CANCELLED")) {
+    await db.series.update({ where: { id: s.id }, data: { stage: "NEW", testNote: "Тест отменён" } });
+    return;
   }
-
+  for (const job of jobs) {
+    if (!["ACTION_REQUIRED", "FAILED", "UNKNOWN"].includes(job.status)) continue;
+    if (job.errorCode === "MODERATION") return markTestFailed(s.id, `${await label(job.id)}${job.errorMessage ?? "YouTube отклонил ролик"}`);
+    // Our side (token, file, network): not a verdict on the series.
+    await setNote(`Загрузка не удалась: ${job.errorMessage ?? job.errorCode ?? "ошибка"}. Исправьте и нажмите «Повторить» в публикации`);
+    return;
+  }
   const now = Date.now();
-  const liveAt = s.testLiveAt ?? new Date(now);
   if (s.testCheckedAt && now - s.testCheckedAt.getTime() < RECHECK_MS) return;
-  const health = await ytVideoHealth(job.account, job.externalId!, job.visibility.toLowerCase());
-  // Blocked only in some countries: the series can still go to the geos where it plays.
-  let geos: string[] | undefined;
-  if (health.state === "bad") {
-    const ours = Object.keys(GEOS);
-    if (!health.region) return markTestFailed(s.id, health.note);
+  // A finished upload is looked at even while the next episodes still upload: a block fails the test early.
+  let geos = Object.keys(GEOS);
+  let pending = false;
+  const notes: string[] = [];
+  for (const job of jobs) {
+    if (job.status !== "PUBLISHED" || !job.externalId) {
+      pending = true;
+      continue;
+    }
+    const health = await ytVideoHealth(job.account, job.externalId, job.visibility.toLowerCase());
+    if (health.state === "pending") pending = true;
+    if (health.state !== "bad") continue;
+    // Blocked only in some countries: the series can still go to the geos where it plays.
+    if (!health.region) return markTestFailed(s.id, `${await label(job.id)}${health.note}`);
     const { blocked, allowed } = health.region;
-    geos = ours.filter((g) => geoCountries(g).every((c) => !blocked?.includes(c) && (!allowed || allowed.includes(c))));
-    if (!geos.length) return markTestFailed(s.id, `${health.note}. Заблокирован во всех наших гео`);
+    geos = geos.filter((g) => geoCountries(g).every((c) => !blocked?.includes(c) && (!allowed || allowed.includes(c))));
+    if (!geos.length) return markTestFailed(s.id, `${await label(job.id)}${health.note}. Заблокирован во всех наших гео`);
+    notes.push(`${await label(job.id)}${health.note}`);
   }
-  const left = Math.ceil((liveAt.getTime() + settings.waitMin * 60_000 - now) / 60_000);
-  const partial = geos ? ` (только ${geos.join(", ")}: ${health.note})` : "";
-  if (health.state !== "pending" && left <= 0)
-    return markTestPassed(s.id, `Прошёл: ${settings.waitMin} мин на @${job.account.handle}${partial || " без блокировок"}`, null, geos);
-  await setNote(health.state === "pending" ? health.note : `Чисто${partial}, наблюдаем ещё ${left} мин`, { testLiveAt: liveAt, testCheckedAt: new Date(now) });
+  const uploaded = jobs.every((j) => j.status === "PUBLISHED" && j.externalId);
+  const liveAt = uploaded ? (s.testLiveAt ?? new Date(now)) : null;
+  const left = liveAt ? Math.ceil((liveAt.getTime() + settings.waitMin * 60_000 - now) / 60_000) : settings.waitMin;
+  const partial = notes.length ? ` (только ${geos.join(", ")}: ${notes.join("; ")})` : "";
+  const what = many ? `${jobs.length} серии` : "";
+  if (uploaded && !pending && left <= 0)
+    return markTestPassed(s.id, `Прошёл${what ? ` (${what})` : ""}: ${settings.waitMin} мин на @${jobs[0].account.handle}${partial || " без блокировок"}`, null, notes.length ? geos : undefined);
+  const note = !uploaded
+    ? `Загружено ${jobs.filter((j) => j.externalId).length} из ${jobs.length} на @${jobs[0].account.handle}, YouTube обрабатывает`
+    : pending
+      ? "YouTube ещё обрабатывает ролик"
+      : `Чисто${partial}, наблюдаем ещё ${left} мин`;
+  await setNote(note, { testLiveAt: liveAt, testCheckedAt: new Date(now) });
 }
 
 /**
@@ -309,16 +343,20 @@ export async function recheckPassedSeries(now = new Date()) {
   });
   const out: string[] = [];
   for (const s of recent) {
-    const job = await db.publicationJob.findUnique({ where: { id: s.testJobId! }, include: { account: true } });
-    if (!job?.externalId || job.account.platform !== "YOUTUBE") continue;
-    let health;
-    try {
-      health = await ytVideoHealth(job.account, job.externalId, job.visibility.toLowerCase());
-    } catch (e) {
-      console.warn(`[series-test] recheck ${s.slug}: ${(e as Error).message}`);
-      continue;
+    let health: Awaited<ReturnType<typeof ytVideoHealth>> | null = null;
+    for (const job of await testRunJobs(s.testJobId!)) {
+      if (!job.externalId || job.account.platform !== "YOUTUBE") continue;
+      try {
+        const h = await ytVideoHealth(job.account, job.externalId, job.visibility.toLowerCase());
+        if (h.state === "bad" && h.note.startsWith("18+")) {
+          health = h;
+          break;
+        }
+      } catch (e) {
+        console.warn(`[series-test] recheck ${s.slug}: ${(e as Error).message}`);
+      }
     }
-    if (health.state !== "bad" || !health.note.startsWith("18+")) continue;
+    if (!health) continue;
     const items = await db.channelQueueItem.findMany({ where: { seriesId: s.id }, include: { account: true } });
     const kept: string[] = [];
     for (const i of items) {
@@ -335,4 +373,53 @@ export async function recheckPassedSeries(now = new Date()) {
     out.push(`${s.title}: ${note}`);
   }
   return out;
+}
+
+/**
+ * Main-channel uploads wait private until their slot. Each is looked at before it opens: if Content ID
+ * blocks it where the channel plays (or YouTube marks it 18+ / rejects it), it is not opened, and the
+ * series' episodes on that channel that aren't public yet are taken off too, so viewers don't get a
+ * Part 3 without a Part 2. The series is marked failed. Returns what was stopped.
+ */
+export async function guardMainUploads(now = new Date()) {
+  const jobs = await db.publicationJob.findMany({
+    where: {
+      platform: "YOUTUBE", visibility: "PUBLIC", status: { in: ["PROCESSING", "SENT"] }, externalId: { not: null },
+      account: { role: "MAIN", status: "ACTIVE" }, scheduledAt: { gt: new Date(now.getTime() - 3600_000) },
+    },
+    include: { account: true },
+    orderBy: { scheduledAt: "asc" },
+  });
+  const stopped: string[] = [];
+  const done = new Set<string>();
+  for (const job of jobs) {
+    const meta = (job.meta ?? {}) as { seriesId?: string; episodeId?: string; purpose?: string };
+    if (!meta.seriesId || !meta.episodeId || meta.purpose === "film" || done.has(`${job.accountId}|${meta.seriesId}`)) continue;
+    let h;
+    try {
+      h = await ytVideoHealth(job.account, job.externalId!, "private");
+    } catch (e) {
+      console.warn(`[guard] ${job.externalId}: ${(e as Error).message}`);
+      continue;
+    }
+    if (h.state !== "bad") continue;
+    if (h.region) {
+      const countries = geoCountries(job.account.geo ?? "");
+      const { blocked, allowed } = h.region;
+      if (countries.every((c) => !blocked?.includes(c) && (!allowed || allowed.includes(c)))) continue; // plays where this channel is
+    }
+    done.add(`${job.accountId}|${meta.seriesId}`);
+    const ep = await db.episode.findUnique({ where: { id: meta.episodeId } });
+    // Every episode of this series on this channel that isn't public yet: uploaded ones stay private, the rest are cancelled.
+    const siblings = await db.publicationJob.findMany({
+      where: { accountId: job.accountId, visibility: "PUBLIC", status: { in: ["QUEUED", "SENT", "PROCESSING"] }, meta: { path: ["seriesId"], equals: meta.seriesId } },
+    });
+    for (const j of siblings) await db.publicationJob.update({ where: { id: j.id }, data: { status: j.externalId ? "CANCEL_PENDING" : "CANCELLED", nextAttemptAt: null } });
+    await db.channelQueueItem.deleteMany({ where: { accountId: job.accountId, seriesId: meta.seriesId, OR: [{ jobId: null }, { jobId: { in: siblings.map((j) => j.id) } }] } });
+    const note = `На @${job.account.handle} серия ${ep?.number ?? "?"}: ${h.note}. Не публикуется, остальные неопубликованные серии сняты`;
+    await markTestFailed(meta.seriesId, note);
+    await audit("main.upload.stopped", "PublicationJob", job.id, null, { note, cancelled: siblings.map((j) => j.id) });
+    stopped.push(note);
+  }
+  return stopped;
 }

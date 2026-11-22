@@ -8,7 +8,7 @@ import { claim, runCancel, runJob } from "@/lib/runner";
 import { runFilms } from "@/lib/films";
 import { flushEmails, notify } from "@/lib/notify";
 import { loadIntegrationKeys } from "@/lib/integrationKeys";
-import { checkSeriesTests, recheckPassedSeries } from "@/lib/seriesTest";
+import { checkSeriesTests, guardMainUploads, recheckPassedSeries } from "@/lib/seriesTest";
 import { scheduleMain, scheduleTests } from "@/lib/conveyor";
 import { markSpanishSeries } from "@/lib/language";
 import { agentRenderOnline, claimRender, getRenderMode, renderOnServer } from "@/lib/renderJobs";
@@ -111,6 +111,7 @@ let lastRecheck = 0;
 let lastStats = 0;
 let lastPlaylists = 0;
 let lastFilms = 0;
+let lastGuard = 0;
 
 async function tick() {
   await heartbeat();
@@ -143,6 +144,10 @@ async function tick() {
     lastPlaylists = Date.now();
     for (const t of await syncSeriesPlaylists().catch((e) => (console.error("[playlists]", e), [] as string[]))) console.log(`[playlists] ${t}`);
     for (const t of await postNextPartComments().catch((e) => (console.error("[comments]", e), [] as string[]))) console.log(`[comments] ${t}`);
+  }
+  if (Date.now() - lastGuard > 20 * 60_000) {
+    lastGuard = Date.now();
+    for (const t of await guardMainUploads().catch((e) => (console.error("[guard]", e), [] as string[]))) console.log(`[guard] ${t}`);
   }
   if (Date.now() - lastFilms > 5 * 60_000) {
     lastFilms = Date.now();

@@ -8,7 +8,7 @@ import { db } from "./db";
 import { encryptJson } from "./crypto";
 import { importRegistry, type Registry } from "./registry";
 import { DEFAULT_CONVEYOR, dropLongMain, dropMainDuplicates, enqueueMain, prepareChannelVersions, rebalanceMain, releaseTestsOnMainChannels, saveConveyorSettings, scheduleMain, scheduleTests, testTimes } from "./conveyor";
-import { checkSeriesTests, markTestPassed, saveYtTestSettings } from "./seriesTest";
+import { checkSeriesTests, guardMainUploads, markTestPassed, saveYtTestSettings, startSeriesTest } from "./seriesTest";
 
 const SLUGS = ["conv-a", "conv-b", "conv-c", "conv-d", "conv-e"];
 const EXT = ["cv_t_us1", "cv_t_us2", "cv_m_us", "cv_m_uk", "cv_m_us2"];
@@ -87,7 +87,12 @@ describe("YouTube conveyor", () => {
 
   it("blocked in the UK only → passes for the US, lines up on the US main channel", async () => {
     const s = await db.series.findUniqueOrThrow({ where: { id: ids["conv-a"] } });
-    await db.publicationJob.update({ where: { id: s.testJobId! }, data: { status: "PUBLISHED", externalId: "vid_conv_a" } });
+    // The conveyor tests episodes 1–3 together; all three are up.
+    const first = await db.publicationJob.findUniqueOrThrow({ where: { id: s.testJobId! } });
+    const run = (first.meta as { testRun: string }).testRun;
+    const runJobs = await db.publicationJob.findMany({ where: { meta: { path: ["testRun"], equals: run } } });
+    expect(runJobs).toHaveLength(3);
+    for (const [n, j] of runJobs.entries()) await db.publicationJob.update({ where: { id: j.id }, data: { status: "PUBLISHED", externalId: `vid_conv_a${n}` } });
     vi.stubGlobal("fetch", async () =>
       Response.json({ items: [{ id: "vid_conv_a", status: { uploadStatus: "processed", privacyStatus: "private" }, contentDetails: { regionRestriction: { blocked: ["GB", "DE"] } } }] }),
     );
@@ -279,6 +284,57 @@ describe("YouTube conveyor", () => {
     expect(await db.channelQueueItem.count({ where: { seriesId: e } })).toBe(0);
     expect((await db.series.findUniqueOrThrow({ where: { id: e } })).mainSkip).toContain("Серия 2");
     await db.assetVersion.updateMany({ where: { asset: { episodeId: ep2.id } }, data: { durationSec: 60 } });
+  });
+
+  it("a block on episode 2 fails the test even though episode 1 is clean, and unsent episodes are dropped", async () => {
+    const e = ids["conv-e"];
+    await db.series.update({ where: { id: e }, data: { stage: "NEW", testJobId: null, testLiveAt: null, testCheckedAt: null } });
+    await db.socialAccount.update({ where: { id: ids.cv_t_us1 }, data: { status: "ACTIVE", role: "TEST" } });
+    const first = await startSeriesTest({ seriesId: e, testAccountId: ids.cv_t_us1, launchAccountId: null, at: new Date(now.getTime() + 3600_000), tz: NY });
+    const run = (first.meta as { testRun: string }).testRun;
+    const jobs = await db.publicationJob.findMany({ where: { meta: { path: ["testRun"], equals: run } }, orderBy: { scheduledAt: "asc" } });
+    expect(jobs).toHaveLength(3);
+    await db.publicationJob.update({ where: { id: jobs[0].id }, data: { status: "PUBLISHED", externalId: "e_ok" } });
+    await db.publicationJob.update({ where: { id: jobs[1].id }, data: { status: "PUBLISHED", externalId: "e_bad" } });
+    vi.stubGlobal("fetch", async (url: string) => {
+      const bad = String(url).includes("e_bad");
+      return Response.json({ items: [{ id: bad ? "e_bad" : "e_ok", status: { uploadStatus: "processed", privacyStatus: "private" }, contentDetails: bad ? { regionRestriction: { blocked: ["US", "GB", "FR"] } } : {} }] });
+    });
+    await checkSeriesTests();
+    const after = await db.series.findUniqueOrThrow({ where: { id: e } });
+    expect(after.stage).toBe("TEST_FAILED");
+    expect(after.testNote).toContain("серия 2");
+    expect((await db.publicationJob.findUniqueOrThrow({ where: { id: jobs[2].id } })).status).toBe("CANCELLED");
+  });
+
+  it("a main upload blocked before its slot is not opened, and the series' later episodes on that channel are dropped", async () => {
+    const d = ids["conv-d"];
+    await db.series.update({ where: { id: d }, data: { stage: "IN_WORK" } });
+    await db.channelQueueItem.deleteMany({ where: { seriesId: d } });
+    const plan = await db.weeklyPlan.findFirstOrThrow();
+    const eps = await db.episode.findMany({ where: { seriesId: d }, orderBy: { number: "asc" }, take: 3 });
+    const mk = (n: number, status: "PUBLISHED" | "PROCESSING" | "QUEUED", externalId: string | null) =>
+      db.publicationJob.create({
+        data: {
+          planId: plan.id, accountId: ids.cv_m_us, platform: "YOUTUBE", format: "YT_SHORT", visibility: "PUBLIC", instanceKey: `guard-${n}`, idempotencyKey: `guard-${n}`,
+          status, scheduledAt: new Date(Date.now() + n * 3600_000), localTime: "x", timezone: NY, deadlineAt: now, caption: "x", externalId,
+          meta: { seriesId: d, episodeId: eps[n].id },
+        },
+      });
+    const j = [await mk(0, "PUBLISHED", "g_ok"), await mk(1, "PROCESSING", "g_bad"), await mk(2, "QUEUED", null)];
+    for (const [n, job] of j.entries()) await db.channelQueueItem.create({ data: { accountId: ids.cv_m_us, seriesId: d, episodeId: eps[n].id, position: 970 + n, jobId: job.id } });
+    vi.stubGlobal("fetch", async (url: string) => {
+      const bad = String(url).includes("g_bad");
+      return Response.json({ items: [{ id: "x", status: { uploadStatus: "processed", privacyStatus: bad ? "private" : "public" }, contentDetails: bad ? { regionRestriction: { blocked: ["US"] } } : {} }] });
+    });
+    const stopped = await guardMainUploads();
+    expect(stopped).toHaveLength(1);
+    expect(stopped[0]).toContain("серия 2");
+    const st = await db.publicationJob.findMany({ where: { id: { in: j.map((x) => x.id) } }, orderBy: { scheduledAt: "asc" } });
+    expect(st.map((x) => x.status)).toEqual(["PUBLISHED", "CANCEL_PENDING", "CANCELLED"]);
+    expect(await db.channelQueueItem.count({ where: { seriesId: d } })).toBe(1); // the published one stays on record
+    expect((await db.series.findUniqueOrThrow({ where: { id: d } })).stage).toBe("TEST_FAILED");
+    await db.publicationJob.deleteMany({ where: { id: { in: j.map((x) => x.id) } } });
   });
 
   it("jitter never puts a test before 09:00", () => {
