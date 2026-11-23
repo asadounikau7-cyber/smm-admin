@@ -119,6 +119,11 @@ model Series {
   testQueuedAt  DateTime?
   /// Geos (US, UK) where the test video was not blocked; main channels of these geos get the series
   allowedGeos   String[]  @default([])
+  /// Most views among YouTube search results with this series' name (same story already out there); null = not checked
+  ytCompetition   Int?
+  ytCompetitionAt DateTime?
+  /// The biggest such video, for people: "title · channel · views"
+  ytCompetitionTop String?
   queueItems    ChannelQueueItem[]
   compilation   Compilation?
   createdAt DateTime  @default(now())

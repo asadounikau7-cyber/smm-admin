@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SocialAccount } from "@prisma/client";
 import { encryptJson } from "../crypto";
-import { ytCanComment, ytChannelSnapshot } from "./youtube";
+import { ytBiggestNamesake, ytCanComment, ytChannelSnapshot } from "./youtube";
 
 const account = { id: "x", handle: "x", credentials: encryptJson({ access_token: "t", refresh_token: "r", expires_at: Date.now() + 3600_000 }) } as unknown as SocialAccount;
 afterEach(() => vi.unstubAllGlobals());
@@ -33,5 +33,25 @@ describe("ytCanComment", () => {
     expect(ytCanComment(acc())).toBeNull();
     expect(ytCanComment(acc("https://www.googleapis.com/auth/youtube https://www.googleapis.com/auth/youtube.upload"))).toBe(false);
     expect(ytCanComment(acc("https://www.googleapis.com/auth/youtube https://www.googleapis.com/auth/youtube.force-ssl"))).toBe(true);
+  });
+});
+
+describe("ytBiggestNamesake", () => {
+  it("counts only videos whose title carries the series name", async () => {
+    vi.stubGlobal("fetch", async (url: string) => {
+      const u = String(url);
+      const j = (b: object) => new Response(JSON.stringify(b), { status: 200 });
+      if (u.includes("/search?")) return j({ items: [{ id: { videoId: "a" } }, { id: { videoId: "b" } }, { id: { videoId: "c" } }] });
+      if (u.includes("/videos?"))
+        return j({ items: [
+          { id: "a", snippet: { title: "Crimson Cage FULL drama", channelTitle: "Big" }, statistics: { viewCount: "450000" } },
+          { id: "b", snippet: { title: "Totally unrelated megahit", channelTitle: "Huge" }, statistics: { viewCount: "9000000" } },
+          { id: "c", snippet: { title: "crimson cage ep 2", channelTitle: "Small" }, statistics: { viewCount: "1200" } },
+        ] });
+      throw new Error(`unexpected ${u}`);
+    });
+    const r = await ytBiggestNamesake(account, "Crimson Cage");
+    expect(r.views).toBe(450000);
+    expect(r.top).toContain("Big");
   });
 });

@@ -5,6 +5,7 @@ import { db } from "./db";
 import { notify } from "./notify";
 import { fmtLen, notAShort, queueAt, startSeriesTest } from "./seriesTest";
 import { adapterFor } from "./adapters";
+import { checkCompetition } from "./competition";
 import { env } from "./env";
 import { toLocal } from "./time";
 import { createVariants } from "./variants";
@@ -45,6 +46,8 @@ export type ConveyorSettings = {
   filmTestAccountId: string | null;
   /** Local time of the daily film */
   filmSlot: string;
+  /** Skip catalog series whose name already has a YouTube video with this many views (0 = off) */
+  competitionMaxViews: number;
 };
 
 export const DEFAULT_CONVEYOR: ConveyorSettings = {
@@ -59,6 +62,7 @@ export const DEFAULT_CONVEYOR: ConveyorSettings = {
   filmAccountIds: [],
   filmTestAccountId: null,
   filmSlot: "19:30",
+  competitionMaxViews: 300_000,
 };
 
 /** Test channels of one geo are shifted against each other so two never upload within half an hour. */
@@ -142,11 +146,31 @@ async function nextSeries(s: ConveyorSettings) {
   const queued = await db.series.findFirst({ where: { testQueuedAt: { not: null }, stage: { in: ["NEW", "TEST_FAILED"] }, bannedAt: null }, orderBy: { testQueuedAt: "asc" } });
   if (queued || !s.autoPick) return queued;
   // Only English content for now: series marked as another language (e.g. Spanish) wait.
-  return db.series.findFirst({
-    where: { stage: "NEW", bannedAt: null, episodes: { some: {} }, OR: [{ contentLang: null }, { contentLang: "en" }] },
+  const base = { stage: "NEW" as const, bannedAt: null, episodes: { some: {} } };
+  const lang = [{ contentLang: null }, { contentLang: "en" }];
+  const where = { ...base, OR: lang };
+  if (!s.competitionMaxViews) return db.series.findFirst({ where, orderBy: [{ createdAt: "asc" }, { title: "asc" }] });
+  // A story that big channels already show on YouTube gets almost no reach on ours: those wait at the back.
+  const candidates = await db.series.findMany({
+    where: { ...base, AND: [{ OR: lang }, { OR: [{ ytCompetition: null }, { ytCompetition: { lt: s.competitionMaxViews } }] }] },
     orderBy: [{ createdAt: "asc" }, { title: "asc" }],
+    take: COMPETITION_CHECKS + 1,
   });
+  let checks = 0;
+  for (const c of candidates) {
+    if (c.ytCompetitionAt) return c;
+    if (checks++ >= COMPETITION_CHECKS) return c; // quota: the rest are looked at next time
+    const found = await checkCompetition(c).catch((e) => {
+      console.warn(`[competition] ${c.slug}: ${(e as Error).message}`);
+      return null;
+    });
+    if (found === null || found < s.competitionMaxViews) return c;
+  }
+  return db.series.findFirst({ where, orderBy: [{ createdAt: "asc" }, { title: "asc" }] }); // everything is crowded: test anyway
 }
+
+/** YouTube searches per pick (100 quota units each, of 10,000 a day). */
+const COMPETITION_CHECKS = 4;
 
 /** Worker: fills today's free test slots on every test channel. Idempotent per slot. */
 /**

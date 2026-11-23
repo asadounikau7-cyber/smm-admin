@@ -696,3 +696,26 @@ export async function postNextPartComments(limit = 10) {
   }
   return posted;
 }
+
+/** Words of a name that carry meaning (lower case, 3+ letters). */
+const nameWords = (s: string) => new Set((s.toLowerCase().match(/[\p{L}\p{N}]{3,}/gu) ?? []).filter((w) => !["the", "and", "for", "with", "her", "his", "you", "full", "episode", "drama", "movie"].includes(w)));
+
+/**
+ * The biggest YouTube video whose title carries this name (most of its words), by views.
+ * 101 quota units: one search plus one statistics lookup.
+ */
+export async function ytBiggestNamesake(account: SocialAccount, name: string) {
+  const want = nameWords(name);
+  const { body } = await api(account, `search?part=snippet&type=video&maxResults=15&relevanceLanguage=en&q=${encodeURIComponent(name)}`);
+  const ids: string[] = (body.items ?? []).map((i: any) => i.id?.videoId).filter(Boolean);
+  if (!ids.length || !want.size) return { views: 0, top: null as string | null };
+  const { body: st } = await api(account, `videos?part=snippet,statistics&id=${ids.join(",")}`);
+  let best = { views: 0, top: null as string | null };
+  for (const v of st.items ?? []) {
+    const have = nameWords(`${v.snippet?.title ?? ""}`);
+    const hit = [...want].filter((w) => have.has(w)).length / want.size;
+    const views = Number(v.statistics?.viewCount ?? 0);
+    if (hit >= 0.6 && views > best.views) best = { views, top: `${v.snippet?.title} · ${v.snippet?.channelTitle} · ${views.toLocaleString("en-US")}` };
+  }
+  return best;
+}
