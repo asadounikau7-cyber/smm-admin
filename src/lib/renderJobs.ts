@@ -51,9 +51,13 @@ async function loadVariant(id: string) {
     const p = await probe(await mediaUrl(v.sourceAsset, sv, 600, { internal: true }));
     sv = await db.assetVersion.update({ where: { id: sv.id }, data: { ...p, probedAt: new Date() } });
   }
-  // {handle} in a text becomes the account's @handle, so one template can sign every account's video.
+  // {handle} in a text becomes the account's @handle, so one template can sign every account's video;
+  // {hook} becomes the series' one-line plot hook (its name when there's none).
+  const series = await db.series.findUnique({ where: { id: v.seriesId }, select: { title: true, hookTitle: true } });
   const recipe = normalizeRecipe(v.recipe);
-  recipe.texts = recipe.texts.map((t) => ({ ...t, text: t.text.replaceAll("{handle}", v.account?.handle ?? "") })).filter((t) => t.text.replace("@", "").trim());
+  recipe.texts = recipe.texts
+    .map((t) => ({ ...t, text: t.text.replaceAll("{handle}", v.account?.handle ?? "").replaceAll("{hook}", series?.hookTitle || series?.title || "") }))
+    .filter((t) => t.text.replace("@", "").trim());
   return { ...v, sourceVersion: sv, recipe };
 }
 
