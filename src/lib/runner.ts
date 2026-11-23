@@ -115,6 +115,10 @@ async function applyError(job: PublicationJob, err: AdapterError) {
   }
   const status = err.kind === "UNKNOWN_RESULT" ? "UNKNOWN" : err.kind === "MODERATION" ? "ACTION_REQUIRED" : "FAILED";
   await db.publicationJob.update({ where: { id: job.id }, data: { ...base, status } });
+  if (err.kind === "MODERATION" && job.platform === "YOUTUBE" && /не найден/i.test(err.message)) {
+    const { stopSeriesAfterRemoval } = await import("./seriesTest");
+    await stopSeriesAfterRemoval(job.id, err.message).catch((e) => console.warn(`[removal] ${job.id}: ${(e as Error).message}`));
+  }
   const label = status === "UNKNOWN" ? "Результат публикации неизвестен, проверьте вручную" : status === "FAILED" ? "Ошибка публикации" : "Отклонено площадкой";
   await notify(`job:${job.id}`, err.kind.toLowerCase(), `${label}: ${err.message.slice(0, 200)}`, link);
 }

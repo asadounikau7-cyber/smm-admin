@@ -435,3 +435,32 @@ export async function guardMainUploads(now = new Date()) {
   }
   return stopped;
 }
+
+/**
+ * YouTube took down an episode on a main channel (usually a Community Guidelines removal: one more within
+ * 90 days is a strike). The whole series stops everywhere: nothing of it that isn't public yet goes out.
+ * Episodes already public stay as they are; that call is left to a person.
+ */
+export async function stopSeriesAfterRemoval(jobId: string, reason: string, now = new Date()) {
+  const job = await db.publicationJob.findUnique({ where: { id: jobId }, include: { account: true } });
+  const meta = (job?.meta ?? {}) as { seriesId?: string; episodeId?: string; purpose?: string };
+  if (!job || job.account.role !== "MAIN" || !meta.seriesId || meta.purpose === "test") return null;
+  const series = await db.series.findUnique({ where: { id: meta.seriesId } });
+  if (!series) return null;
+  const pending = (
+    await db.publicationJob.findMany({
+      where: {
+        id: { not: job.id }, platform: "YOUTUBE", status: { in: ["QUEUED", "SENT", "PROCESSING"] },
+        meta: { path: ["seriesId"], equals: meta.seriesId }, scheduledAt: { gt: new Date(now.getTime() + 5 * 60_000) },
+      },
+    })
+  ).filter((j) => (j.meta as { purpose?: string } | null)?.purpose !== "test");
+  for (const j of pending) await db.publicationJob.update({ where: { id: j.id }, data: { status: j.externalId ? "CANCEL_PENDING" : "CANCELLED", nextAttemptAt: null } });
+  await db.channelQueueItem.deleteMany({ where: { seriesId: meta.seriesId } });
+  const ep = meta.episodeId ? await db.episode.findUnique({ where: { id: meta.episodeId } }) : null;
+  const note = `YouTube удалил серию ${ep?.number ?? "?"} на @${job.account.handle} (${reason}). Проверьте почту канала: скорее всего нарушение правил сообщества. Сериал снят со всех каналов`;
+  await db.series.update({ where: { id: series.id }, data: { stage: "TEST_FAILED", testNote: note } });
+  await audit("main.series.removed", "PublicationJob", job.id, null, { note, cancelled: pending.map((j) => j.id) });
+  await notify(`series-removed:${series.id}`, "series-test", `«${series.title}»: ${note}`, `/publications/${job.id}`);
+  return { note, cancelled: pending.length };
+}

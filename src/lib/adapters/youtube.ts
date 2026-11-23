@@ -303,7 +303,8 @@ export const youtube: PlatformAdapter = {
       if (/404|videoNotFound|cannot be found/i.test((e as Error).message)) return;
       throw e;
     }
-    const clean = (st: any) => st?.privacyStatus === "private" && !st.publishAt;
+    // A publishAt already in the past is what's left after YouTube opened the video at its slot; it never fires again.
+    const clean = (st: any) => st?.privacyStatus === "private" && (!st.publishAt || Date.parse(st.publishAt) <= Date.now());
     // The update's own answer is what YouTube kept; a separate read right after it often lags.
     if (clean(put?.status)) return;
     const { body } = await api(job.account, `videos?part=status&id=${id}`);

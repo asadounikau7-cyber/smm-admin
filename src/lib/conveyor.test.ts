@@ -8,7 +8,7 @@ import { db } from "./db";
 import { encryptJson } from "./crypto";
 import { importRegistry, type Registry } from "./registry";
 import { DEFAULT_CONVEYOR, dropLongMain, dropMainDuplicates, enqueueMain, prepareChannelVersions, rebalanceMain, releaseTestsOnMainChannels, saveConveyorSettings, scheduleMain, scheduleTests, testTimes } from "./conveyor";
-import { checkSeriesTests, guardMainUploads, markTestPassed, saveYtTestSettings, startSeriesTest } from "./seriesTest";
+import { checkSeriesTests, guardMainUploads, markTestPassed, saveYtTestSettings, startSeriesTest, stopSeriesAfterRemoval } from "./seriesTest";
 
 const SLUGS = ["conv-a", "conv-b", "conv-c", "conv-d", "conv-e"];
 const EXT = ["cv_t_us1", "cv_t_us2", "cv_m_us", "cv_m_uk", "cv_m_us2"];
@@ -336,6 +336,33 @@ describe("YouTube conveyor", () => {
     expect(await db.channelQueueItem.count({ where: { seriesId: d } })).toBe(1); // Part 1 stays in the line
     expect((await db.series.findUniqueOrThrow({ where: { id: d } })).stage).toBe("TEST_FAILED");
     await db.publicationJob.deleteMany({ where: { id: { in: j.map((x) => x.id) } } });
+  });
+
+  it("a main episode YouTube removed stops the whole series on every channel", async () => {
+    const d = ids["conv-d"];
+    await db.series.update({ where: { id: d }, data: { stage: "IN_WORK", testNote: null } });
+    const plan = await db.weeklyPlan.findFirstOrThrow();
+    const eps = await db.episode.findMany({ where: { seriesId: d }, orderBy: { number: "asc" }, take: 3 });
+    const mk = (n: number, acc: string, status: "PUBLISHED" | "PROCESSING" | "QUEUED", externalId: string | null, inH: number) =>
+      db.publicationJob.create({
+        data: {
+          planId: plan.id, accountId: acc, platform: "YOUTUBE", format: "YT_SHORT", visibility: "PUBLIC", instanceKey: `rm-${n}-${acc}`, idempotencyKey: `rm-${n}-${acc}`,
+          status, scheduledAt: new Date(Date.now() + inH * 3600_000), localTime: "x", timezone: NY, deadlineAt: now, caption: "x", externalId,
+          meta: { seriesId: d, episodeId: eps[n].id },
+        },
+      });
+    const removed = await mk(0, ids.cv_m_us, "PROCESSING", "r_gone", 0);
+    const later = [await mk(1, ids.cv_m_us, "PROCESSING", "r_up", 3), await mk(2, ids.cv_m_us, "QUEUED", null, 6), await mk(1, ids.cv_m_uk, "QUEUED", null, 4)];
+    await db.channelQueueItem.create({ data: { accountId: ids.cv_m_uk, seriesId: d, episodeId: eps[2].id, position: 990 } });
+    const r = await stopSeriesAfterRemoval(removed.id, "Ролик не найден на YouTube");
+    expect(r?.cancelled).toBe(3);
+    const st = await db.publicationJob.findMany({ where: { id: { in: later.map((x) => x.id) } }, orderBy: { scheduledAt: "asc" } });
+    expect(st.map((x) => x.status)).toEqual(["CANCEL_PENDING", "CANCELLED", "CANCELLED"]);
+    expect(await db.channelQueueItem.count({ where: { seriesId: d } })).toBe(0);
+    const s = await db.series.findUniqueOrThrow({ where: { id: d } });
+    expect(s.stage).toBe("TEST_FAILED");
+    expect(s.testNote).toContain("правил сообщества");
+    await db.publicationJob.deleteMany({ where: { id: { in: [removed.id, ...later.map((x) => x.id)] } } });
   });
 
   it("jitter never puts a test before 09:00", () => {
