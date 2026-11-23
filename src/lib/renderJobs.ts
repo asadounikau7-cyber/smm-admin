@@ -103,7 +103,8 @@ async function withWorkdir<T>(files: Record<string, string>, fn: (dir: string) =
 
 async function ffmpegIn(dir: string, args: string[], input: string, timeoutMs: number) {
   const a = args.map((x) => (x === "in0.mp4" ? input : x));
-  const r = await run("ffmpeg", a, timeoutMs, dir);
+  // Low priority, so the site and the database stay responsive while a version renders.
+  const r = await run("nice", ["-n", "15", "ffmpeg", ...a], timeoutMs, dir);
   if (r.code !== 0) throw new Error(`ffmpeg: ${r.stderr.trim().split("\n").slice(-3).join(" ").slice(0, 400)}`);
 }
 

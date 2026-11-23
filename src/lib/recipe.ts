@@ -357,23 +357,26 @@ export function buildRender(r0: Recipe, src: { durationSec: number | null; hasAu
   const files: Record<string, string> = {};
   const g: string[] = [];
   const A = src.hasAudio;
+  const inputs: string[] = [];
 
+  // The hook clip is read as its own seeked input: splitting one decoded stream and trimming a later part
+  // makes ffmpeg hold every frame in between in memory (gigabytes at 1080x1920).
   if (r.hook) {
     const hs = r.hook.from;
-    const he = src.durationSec ? Math.min(src.durationSec, hs + r.hook.length) : hs + r.hook.length;
-    g.push(`[0:v]split=2[vs0][vs1]`);
-    if (A) g.push(`[0:a]asplit=2[as0][as1]`);
-    g.push(`[vs0]trim=start=${n(hs)}:end=${n(he)},setpts=PTS-STARTPTS[vh]`);
-    g.push(`[vs1]trim=start=${n(start)}:end=${n(end)},setpts=PTS-STARTPTS[vm]`);
+    const hl = src.durationSec ? Math.max(0.1, Math.min(r.hook.length, src.durationSec - hs)) : r.hook.length;
+    g.push(`[0:v]setpts=PTS-STARTPTS[vh]`);
+    g.push(`[1:v]trim=start=${n(start)}:end=${n(end)},setpts=PTS-STARTPTS[vm]`);
     if (A) {
-      g.push(`[as0]atrim=start=${n(hs)}:end=${n(he)},asetpts=PTS-STARTPTS[ah]`);
-      g.push(`[as1]atrim=start=${n(start)}:end=${n(end)},asetpts=PTS-STARTPTS[am]`);
+      g.push(`[0:a]asetpts=PTS-STARTPTS[ah]`);
+      g.push(`[1:a]atrim=start=${n(start)}:end=${n(end)},asetpts=PTS-STARTPTS[am]`);
       g.push(`[vh][ah][vm][am]concat=n=2:v=1:a=1[vc][ac]`);
     } else g.push(`[vh][vm]concat=n=2:v=1:a=0[vc]`);
+    inputs.push("-ss", n(hs), "-t", n(hl), "-i", "in0.mp4");
   } else {
     g.push(`[0:v]trim=start=${n(start)}:end=${n(end)},setpts=PTS-STARTPTS[vc]`);
     if (A) g.push(`[0:a]atrim=start=${n(start)}:end=${n(end)},asetpts=PTS-STARTPTS[ac]`);
   }
+  inputs.push("-i", "in0.mp4");
 
   const v: string[] = [];
   if (r.speed !== 1) v.push(`setpts=PTS/${n(r.speed)}`);
@@ -397,8 +400,10 @@ export function buildRender(r0: Recipe, src: { durationSec: number | null; hasAu
   }
 
   const args = [
-    "-hide_banner", "-y", "-i", "in0.mp4",
+    "-hide_banner", "-y", ...inputs,
     "-filter_complex", g.join(";"),
+    // One core and a small queue: the server also runs the site and the database on 2 GB.
+    "-threads", "2", "-filter_threads", "1",
     "-map", "[vout]",
     ...(A ? ["-map", "[aout]", "-c:a", "aac", "-b:a", "128k"] : ["-an"]),
     "-c:v", "libx264", "-preset", preset, "-crf", "20", "-profile:v", "high", "-pix_fmt", "yuv420p",
