@@ -1,3 +1,4 @@
+import { isManual } from "./adapters";
 import { createHash } from "node:crypto";
 import { Prisma, type Asset, type AssetVersion, type Episode, type ReleaseRule, type Series, type SocialAccount } from "@prisma/client";
 import { db } from "./db";
@@ -331,7 +332,7 @@ export async function approveWeek(planId: string, userId: string, approveKey: st
     let queued = 0;
     let manual = 0;
     for (const j of drafts.filter((d) => d.status === "DRAFT")) {
-      const manualTikTok = j.platform === "TIKTOK" && j.account.tiktokMode !== "PARTNER";
+      const manualTikTok = isManual(j.account);
       await tx.publicationJob.update({
         where: { id: j.id },
         data: { status: manualTikTok ? "ACTION_REQUIRED" : "QUEUED", rowVersion: { increment: 1 }, errorCode: manualTikTok ? "MANUAL" : null, errorMessage: manualTikTok ? "Поставьте пост в TikTok Studio по пакету" : null },

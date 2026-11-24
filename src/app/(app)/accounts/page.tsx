@@ -57,7 +57,7 @@ export default async function AccountsPage({ searchParams }: { searchParams: Pro
                         <option value="">Без шаблона (оригинал)</option>
                         {templates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
                       </select>
-                      {a.platform === "TIKTOK" && (
+                      {(a.platform === "TIKTOK" || (a.platform === "INSTAGRAM" && a.tiktokMode)) && (
                         <select name="mode" defaultValue={a.tiktokMode ?? "MANUAL"} className="input w-36">
                           <option value="MANUAL">Вручную (пакет)</option>
                           <option value="PARTNER">Upload-Post</option>
@@ -97,7 +97,7 @@ export default async function AccountsPage({ searchParams }: { searchParams: Pro
           <label className="label">Площадка</label>
           <select name="platform" className="input">
             <option value="TIKTOK">TikTok</option>
-            <option value="INSTAGRAM">Instagram (через Upload-Post)</option>
+            <option value="INSTAGRAM">Instagram</option>
           </select>
         </div>
         <div><label className="label">@аккаунт</label><input name="handle" required className="input" placeholder="@channel_en" /></div>
@@ -111,17 +111,17 @@ export default async function AccountsPage({ searchParams }: { searchParams: Pro
           </select>
         </div>
         <div>
-          <label className="label">Режим TikTok</label>
-          <select name="mode" className="input" defaultValue="PARTNER">
-            <option value="PARTNER">Upload-Post (сам публикует)</option>
-            <option value="MANUAL">Вручную: пакет для TikTok Studio</option>
+          <label className="label">Режим</label>
+          <select name="mode" className="input" defaultValue="MANUAL">
+            <option value="MANUAL">Вручную: готовый пакет (файл + подпись)</option>
+            <option value="PARTNER">Upload-Post (сам публикует, платно)</option>
           </select>
         </div>
-        <div><label className="label">Профиль Upload-Post</label><input name="uploadPostProfile" className="input" placeholder="имя профиля в Upload-Post" /></div>
+        <div><label className="label">Профиль Upload-Post</label><input name="uploadPostProfile" className="input" placeholder="только для Upload-Post" /></div>
         <button className="btn btn-primary">Добавить</button>
       </form>
       <p className="mt-2 text-xs muted">
-        TikTok и Instagram с гео получают сериалы, прошедшие тест на YouTube: каждый сериал на один аккаунт площадки, по слотам из Настроек. В Upload-Post один профиль = один TikTok + один Instagram; профиль можно указать у обоих.
+        TikTok и Instagram с гео получают сериалы, прошедшие тест на YouTube: каждый сериал на один аккаунт площадки, по слотам из Настроек. В ручном режиме админка готовит пакет к каждому слоту (видео + подпись), его ставят по инструкции на странице публикации. Upload-Post: один профиль = один TikTok + один Instagram.
       </p>
       <p className="mt-2 text-xs muted">
         Аккаунты YouTube и Instagram подключаются через OAuth владельцем аккаунта: пароли не нужны. Пока приложения Google и Meta не прошли проверку, подключать можно только аккаунты, добавленные в тестировщики.

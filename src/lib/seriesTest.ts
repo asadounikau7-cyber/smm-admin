@@ -10,6 +10,7 @@ import { getOrCreatePlan } from "./planner";
 import { toLocal, weekStartFor } from "./time";
 import { VALIDATORS } from "./validators";
 import { ytVideoHealth } from "./adapters/youtube";
+import { isManual } from "./adapters";
 import { notify, resolveNotification } from "./notify";
 import { audit } from "./audit";
 import { GEOS, enqueueMain, getConveyorSettings, geoCountries } from "./conveyor";
@@ -104,8 +105,8 @@ export async function queueAt(i: JobInput, at?: Date, tz: string = env().BASE_TI
   const caption = yt ? yt.description : socialCaption(platform as "TIKTOK" | "INSTAGRAM", i.series, i.ep);
   const title = yt ? yt.title : null;
   const tags = yt ? yt.tags : [];
-  // A TikTok account without Upload-Post gets a package: someone posts it by hand in TikTok Studio.
-  const manual = platform === "TIKTOK" && i.account.tiktokMode !== "PARTNER";
+  // A manual TikTok / Instagram account gets a package: someone posts it by hand.
+  const manual = isManual(i.account);
   const data = {
     accountId: i.account.id,
     assetVersionId: file.version.id,
@@ -123,7 +124,7 @@ export async function queueAt(i: JobInput, at?: Date, tz: string = env().BASE_TI
     externalId: null,
     externalUrl: null,
     errorCode: manual ? "MANUAL" : null,
-    errorMessage: manual ? "Поставьте пост в TikTok Studio по пакету" : null,
+    errorMessage: manual ? `Поставьте пост в ${platform === "INSTAGRAM" ? "Instagram" : "TikTok Studio"} по пакету` : null,
     attemptCount: 0,
     nextAttemptAt: null,
     leaseUntil: null,

@@ -5,7 +5,7 @@ import { db } from "@/lib/db";
 import { Flash, PageHeader, PlatformTag, StatusBadge, fmtDur, fmtSize } from "@/components/ui";
 import { CopyButton } from "@/components/copy";
 import { FORMAT_LABEL } from "@/lib/validators";
-import { adapterFor } from "@/lib/adapters";
+import { adapterFor, isManual } from "@/lib/adapters";
 import { agentCommandAction, cancelJobAction, generateCoverAction, manualStatusAction, rescheduleJobAction, retryJobAction, setYtPrivacyAction } from "@/app/actions";
 import { studioEditUrl } from "@/lib/adapters/youtube";
 
@@ -26,7 +26,8 @@ export default async function JobPage({ params, searchParams }: { params: Promis
   const audit = await db.auditEvent.findMany({ where: { entity: "PublicationJob", entityId: id }, include: { user: true }, orderBy: { createdAt: "desc" }, take: 20 });
   const meta = (j.meta ?? {}) as Record<string, any>;
   const a = j.assetVersion?.asset;
-  const manualTikTok = j.platform === "TIKTOK" && j.account.tiktokMode !== "PARTNER";
+  const manualTikTok = isManual(j.account);
+  const ig = j.platform === "INSTAGRAM";
   const caps = adapterFor(j.account)?.capabilities;
   const active = !["CANCELLED", "PUBLISHED", "CANCEL_PENDING"].includes(j.status);
   const flags = [meta.aiDisclosure && "AI-контент", meta.paidPromotion && "Платное продвижение / реклама", meta.madeForKids && "Для детей"].filter(Boolean) as string[];
@@ -91,11 +92,15 @@ export default async function JobPage({ params, searchParams }: { params: Promis
 
       {manualTikTok && (
         <section className="card mb-4 space-y-3 p-4">
-          <h2 className="font-medium">Пакет для TikTok Studio</h2>
+          <h2 className="font-medium">{ig ? "Пакет для Instagram Reels" : "Пакет для TikTok Studio"}</h2>
           <ol className="list-decimal space-y-1 pl-5 text-sm">
             <li>Скачайте видео{j.coverKey ? " и обложку" : ""}.</li>
             {j.account.octoProfile && <li>Откройте профиль Octo <b>{j.account.octoProfile.title}</b>.</li>}
-            <li>В TikTok Studio (веб) загрузите видео в аккаунт <b>@{j.account.handle}</b>, вставьте подпись, включите расписание и поставьте время <b>{j.localTime}</b> ({j.timezone}).</li>
+            {ig ? (
+              <li>В Instagram (Meta Business Suite или приложение) создайте Reels в аккаунте <b>@{j.account.handle}</b>, вставьте подпись и запланируйте на <b>{j.localTime}</b> ({j.timezone}) или опубликуйте в это время.</li>
+            ) : (
+              <li>В TikTok Studio (веб) загрузите видео в аккаунт <b>@{j.account.handle}</b>, вставьте подпись, включите расписание и поставьте время <b>{j.localTime}</b> ({j.timezone}).</li>
+            )}
             {flags.length > 0 && <li>Включите маркировку: <b>{flags.join(", ")}</b>.</li>}
             <li>Нажмите «Запланировано вручную» ниже. После выхода поста вставьте ссылку и отметьте «Опубликовано».</li>
           </ol>
@@ -116,7 +121,7 @@ export default async function JobPage({ params, searchParams }: { params: Promis
               <form action={manualStatusAction} className="flex flex-wrap gap-2">
                 <input type="hidden" name="id" value={j.id} /><input type="hidden" name="rowVersion" value={j.rowVersion} />
                 <input type="hidden" name="target" value="PUBLISHED" />
-                <input name="url" required placeholder="https://www.tiktok.com/@…/video/…" className="input w-64" />
+                <input name="url" required placeholder={ig ? "https://www.instagram.com/reel/…" : "https://www.tiktok.com/@…/video/…"} className="input w-64" />
                 <button className="btn btn-primary">Опубликовано</button>
               </form>
             </div>
@@ -160,7 +165,7 @@ export default async function JobPage({ params, searchParams }: { params: Promis
             <button className="btn btn-danger">{j.externalId ? "Отменить на площадке" : "Отменить"}</button>
           </form>
         )}
-        {manualTikTok && j.status === "MANUALLY_SCHEDULED" && <p className="text-xs muted">Отмена здесь не удалит пост из TikTok Studio — удалите его там вручную.</p>}
+        {manualTikTok && j.status === "MANUALLY_SCHEDULED" && <p className="text-xs muted">Отмена здесь не удалит пост из {ig ? "Instagram" : "TikTok Studio"}: удалите его там вручную.</p>}
       </section>
 
       <section className="mb-4">

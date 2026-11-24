@@ -3,6 +3,7 @@
 import bcrypt from "bcryptjs";
 import { randomUUID } from "node:crypto";
 import { redirect } from "next/navigation";
+import { isManual } from "@/lib/adapters";
 import { revalidatePath } from "next/cache";
 import type { AssetKind, PostFormat, Visibility, TikTokMode, Role } from "@prisma/client";
 import { db } from "@/lib/db";
@@ -120,7 +121,7 @@ export async function addTikTokAccountAction(f: FormData) {
   const platform = s(f, "platform") === "INSTAGRAM" ? ("INSTAGRAM" as const) : ("TIKTOK" as const);
   const handle = s(f, "handle").replace(/^@/, "");
   if (!handle) redirect("/accounts?err=" + encodeURIComponent("Укажите @аккаунт"));
-  const mode = platform === "INSTAGRAM" ? ("PARTNER" as TikTokMode) : ((s(f, "mode") || "MANUAL") as TikTokMode);
+  const mode = (s(f, "mode") === "PARTNER" ? "PARTNER" : "MANUAL") as TikTokMode;
   const profile = s(f, "uploadPostProfile");
   if (mode === "PARTNER" && !profile) redirect("/accounts?err=" + encodeURIComponent("Укажите имя профиля Upload-Post, где подключён этот аккаунт"));
   const externalId = mode === "PARTNER" ? profile : handle;
@@ -335,7 +336,7 @@ export async function rescheduleJobAction(f: FormData) {
       scheduledAt: at,
       localTime: toLocal(at, job.timezone),
       deadlineAt: new Date(at.getTime() + env().CATCHUP_WINDOW_MIN * 60_000),
-      ...(back ? { status: job.platform === "TIKTOK" && job.account.tiktokMode !== "PARTNER" ? "ACTION_REQUIRED" : "QUEUED", errorCode: null, errorMessage: null, attemptCount: 0, nextAttemptAt: null } : {}),
+      ...(back ? { status: isManual(job.account) ? "ACTION_REQUIRED" : "QUEUED", errorCode: null, errorMessage: null, attemptCount: 0, nextAttemptAt: null } : {}),
     },
     u.id,
     "job.reschedule",
