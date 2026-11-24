@@ -1,6 +1,6 @@
 import { db } from "./db";
 
-const ES_WORDS = new Set(["el", "la", "los", "las", "del", "con", "por", "para", "una", "que", "su", "sus"]);
+const ES_WORDS = new Set(["el", "la", "los", "las", "del", "de", "con", "por", "para", "una", "un", "que", "su", "sus", "mis", "tus", "y", "sin", "entre"]);
 
 /** Spanish title guess: Spanish-only letters or Spanish function words ("Fiancé" alone is not enough). */
 export function looksSpanish(title: string) {

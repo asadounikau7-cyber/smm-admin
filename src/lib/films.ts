@@ -313,12 +313,9 @@ export async function scheduleFilms(now = new Date()) {
   for (const account of mains) {
     const tz = isGeo(account.geo) ? GEOS[account.geo].tz : "America/New_York";
     const today = DateTime.fromJSDate(now, { zone: tz }).startOf("day");
-    for (let d = 0; d <= FILM_DAYS_AHEAD; d++) {
+    // As soon as possible: today only; the days after are planned when they come.
+    for (let d = 0; d <= (s.filmAsap ? 0 : FILM_DAYS_AHEAD); d++) {
       const day = today.plus({ days: d });
-      const [h, m] = s.filmSlot.split(":").map(Number);
-      const slot = day.set({ hour: h, minute: m }).toJSDate();
-      // Far enough ahead to upload a big file before the slot.
-      if (slot.getTime() < now.getTime() + 3 * 3600_000) continue;
       const taken = await db.publicationJob.findFirst({
         where: { accountId: account.id, status: { not: "CANCELLED" }, visibility: "PUBLIC", instanceKey: { startsWith: "film" }, scheduledAt: { gte: day.toJSDate(), lt: day.plus({ days: 1 }).toJSDate() } },
       });
@@ -329,6 +326,16 @@ export async function scheduleFilms(now = new Date()) {
         include: { series: true },
       });
       if (!comp) break;
+      // A film already uploaded on this channel (checked in place) only needs YouTube to open it;
+      // one still to upload needs time for a big file.
+      const lead = comp.accountId === account.id ? 15 * 60_000 : 3 * 3600_000;
+      let slot: Date;
+      if (s.filmAsap) slot = new Date(now.getTime() + lead);
+      else {
+        const [h, m] = s.filmSlot.split(":").map(Number);
+        slot = day.set({ hour: h, minute: m }).toJSDate();
+        if (slot.getTime() < now.getTime() + lead) continue;
+      }
       const job = comp.accountId ? await publishTested(comp, slot, tz) : await createJob(comp, account, "PUBLIC", slot, "film");
       await db.compilation.update({ where: { id: comp.id }, data: { status: "SCHEDULED", mainJobId: job.id, accountId: account.id, note: `Выйдет на @${account.handle} ${toLocal(slot, tz, "dd.MM HH:mm")}` } });
       planned.push(`${comp.series.title} → @${account.handle} ${slot.toISOString()}`);

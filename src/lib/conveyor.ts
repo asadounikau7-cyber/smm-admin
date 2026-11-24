@@ -46,6 +46,8 @@ export type ConveyorSettings = {
   filmTestAccountId: string | null;
   /** Local time of the daily film */
   filmSlot: string;
+  /** Publish a film as soon as it has passed its check (one a day per channel) instead of at filmSlot */
+  filmAsap: boolean;
   /** Skip catalog series whose name already has a YouTube video with this many views (0 = off) */
   competitionMaxViews: number;
 };
@@ -62,6 +64,7 @@ export const DEFAULT_CONVEYOR: ConveyorSettings = {
   filmAccountIds: [],
   filmTestAccountId: null,
   filmSlot: "19:30",
+  filmAsap: false,
   competitionMaxViews: 300_000,
 };
 
@@ -256,6 +259,8 @@ export async function enqueueMain(seriesId: string) {
   const s = await getConveyorSettings();
   const series = await db.series.findUniqueOrThrow({ where: { id: seriesId }, include: { episodes: { orderBy: [{ season: "asc" }, { number: "asc" }] } } });
   const eps = series.episodes.slice(0, s.mainEpisodes);
+  // English only for now (main channels are English-speaking).
+  if (series.contentLang && series.contentLang !== "en") return [];
   const mains = (await channels("MAIN")).filter((m) => series.allowedGeos.includes(m.geo as string));
   if (!mains.length) return [];
   // Already lined up on a main channel, or already out on one (e.g. launched before the conveyor): leave it.
@@ -340,6 +345,28 @@ export async function dropLongMain() {
     dropped.push(`${group[0].series.title}: ${long}`);
   }
   return dropped;
+}
+
+/**
+ * Series in another language (e.g. Spanish, marked by hand or by the title guess) come off the
+ * English main channels: what isn't public yet is called off, what already went out stays.
+ */
+export async function dropForeignMain(now = new Date()) {
+  const items = await db.channelQueueItem.findMany({
+    where: { account: { role: "MAIN" }, series: { contentLang: { not: null }, NOT: { contentLang: "en" } } },
+    include: { series: { select: { title: true, contentLang: true } } },
+  });
+  const dropped = new Set<string>();
+  for (const i of items) {
+    const j = i.jobId ? await db.publicationJob.findUnique({ where: { id: i.jobId } }) : null;
+    if (j && ["PUBLISHED", "MANUALLY_SCHEDULED"].includes(j.status)) continue;
+    if (j && j.externalId && j.scheduledAt.getTime() <= now.getTime() + 5 * 60_000) continue; // opening right now
+    if (j && !["CANCELLED", "CANCEL_PENDING"].includes(j.status))
+      await db.publicationJob.update({ where: { id: j.id }, data: { status: j.externalId ? "CANCEL_PENDING" : "CANCELLED", nextAttemptAt: null } });
+    await db.channelQueueItem.delete({ where: { id: i.id } });
+    dropped.add(`${i.series.title} (${i.series.contentLang})`);
+  }
+  return [...dropped];
 }
 
 /** A public upload of this series exists on some main channel outside the conveyor's queue. */
@@ -494,6 +521,7 @@ export async function scheduleMain(now = new Date()) {
   await backfillMain();
   for (const t of await dropMainDuplicates()) console.log(`[conveyor] duplicate dropped: ${t}`);
   for (const t of await dropLongMain()) console.log(`[conveyor] not a Short, dropped: ${t}`);
+  for (const t of await dropForeignMain(now)) console.log(`[conveyor] not English, dropped: ${t}`);
   await rebalanceMain();
   const pv = s.channelVersions ? await prepareChannelVersions() : { made: 0, attached: 0 };
   if (pv.made || pv.attached) console.log(`[conveyor] channel versions: ${pv.made} new, ${pv.attached} attached`);

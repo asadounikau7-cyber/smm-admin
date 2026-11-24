@@ -197,6 +197,7 @@ export async function saveFilmSettingsAction(f: FormData) {
     filmTestAccountId: s(f, "filmTestAccountId") || null,
     filmAccountIds: f.getAll("filmAccountIds").filter((x): x is string => typeof x === "string" && x !== ""),
     filmSlot: slot.padStart(5, "0"),
+    filmAsap: f.get("filmAsap") === "on",
   };
   await saveConveyorSettings(v);
   await audit("settings.films", "Setting", "ytConveyor", u.id, { filmTestAccountId: v.filmTestAccountId, filmAccountIds: v.filmAccountIds, filmSlot: v.filmSlot });

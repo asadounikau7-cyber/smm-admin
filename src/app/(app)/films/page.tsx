@@ -55,7 +55,8 @@ export default async function FilmsPage({ searchParams }: { searchParams: Promis
             ))}
           </div>
         </div>
-        <label className="block">Время выхода (местное для гео канала) <input name="filmSlot" defaultValue={s.filmSlot} className="input ml-2 w-24" /></label>
+        <label className="flex items-center gap-2"><input type="checkbox" name="filmAsap" defaultChecked={s.filmAsap} /> Выпускать сразу после теста (до одного фильма в день на канал)</label>
+        <label className="block">Иначе время выхода (местное для гео канала) <input name="filmSlot" defaultValue={s.filmSlot} className="input ml-2 w-24" /></label>
         <button className="btn btn-primary">Сохранить</button>
       </form>
 
