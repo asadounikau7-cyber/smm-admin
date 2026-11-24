@@ -3,7 +3,7 @@ import { decryptJson, encryptJson } from "./crypto";
 import { setEnvOverrides, type Env } from "./env";
 
 /** Keys the owner can enter in «Настройки» instead of editing .env on the server. */
-export const INTEGRATION_KEYS = ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "INSTAGRAM_APP_ID", "INSTAGRAM_APP_SECRET", "UPLOAD_POST_API_KEY"] as const;
+export const INTEGRATION_KEYS = ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "INSTAGRAM_APP_ID", "INSTAGRAM_APP_SECRET", "UPLOAD_POST_API_KEY", "B2_KEY_ID", "B2_APP_KEY"] as const;
 export type IntegrationKey = (typeof INTEGRATION_KEYS)[number];
 const SETTING = "integrationKeys";
 const TTL_MS = 30_000;

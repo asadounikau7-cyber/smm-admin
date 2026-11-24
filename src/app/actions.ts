@@ -414,6 +414,18 @@ export async function saveIntegrationKeysAction(f: FormData) {
   await audit("settings.keys", "Setting", "integrationKeys", u.id, { set: INTEGRATION_KEYS.filter((k) => values[k]), clear });
   revalidatePath("/settings");
   revalidatePath("/accounts");
+  // A Backblaze key is checked right away, so a wrong one shows here and not as failed uploads later.
+  if (values.B2_KEY_ID || values.B2_APP_KEY) {
+    const { b2Token } = await import("@/lib/b2auth");
+    let err: string | null = null;
+    try {
+      await b2Token(true);
+    } catch (e) {
+      err = (e as Error).message;
+    }
+    if (err) redirect("/settings?err=" + encodeURIComponent(`Ключи сохранены, но ${err}`));
+    redirect("/settings?ok=" + encodeURIComponent("Ключ Backblaze принят: файлы из закрытого бакета снова скачиваются"));
+  }
   redirect("/settings?ok=" + encodeURIComponent("Ключи сохранены. Подключать аккаунты можно сразу"));
 }
 

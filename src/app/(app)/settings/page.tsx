@@ -26,6 +26,8 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
     { k: "INSTAGRAM_APP_ID", label: "Instagram App ID", group: "Instagram" },
     { k: "INSTAGRAM_APP_SECRET", label: "Instagram App Secret", group: "Instagram" },
     { k: "UPLOAD_POST_API_KEY", label: "Upload-Post API key", group: "TikTok" },
+    { k: "B2_KEY_ID", label: "Backblaze keyID (ключ только на чтение)", group: "B2" },
+    { k: "B2_APP_KEY", label: "Backblaze applicationKey", group: "B2" },
   ] as const;
   const hint = (v?: string) => (v ? `…${v.slice(-4)}` : "");
   const check = (ok: boolean) => (ok ? <span className="text-green-600">настроено</span> : <span className="muted">не настроено</span>);
