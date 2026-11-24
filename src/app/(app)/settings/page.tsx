@@ -108,6 +108,10 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
             <input name="mainSlots" defaultValue={conv.mainSlots.join(", ")} className="input" />
           </div>
           <div>
+            <label className="label">Слоты TikTok и Instagram (пусто = не публиковать)</label>
+            <input name="socialSlots" defaultValue={conv.socialSlots.join(", ")} className="input" />
+          </div>
+          <div>
             <label className="label">Сколько первых серий выкладывать на боевой</label>
             <input name="mainEpisodes" type="number" min={1} defaultValue={conv.mainEpisodes} className="input" />
           </div>

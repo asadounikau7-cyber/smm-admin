@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { DateTime } from "luxon";
-import type { Episode, SocialAccount } from "@prisma/client";
+import type { Episode, Platform, SocialAccount } from "@prisma/client";
 import { db } from "./db";
 import { notify } from "./notify";
 import { fmtLen, notAShort, queueAt, startSeriesTest } from "./seriesTest";
@@ -50,6 +50,8 @@ export type ConveyorSettings = {
   filmAsap: boolean;
   /** Skip catalog series whose name already has a YouTube video with this many views (0 = off) */
   competitionMaxViews: number;
+  /** Local times on each TikTok / Instagram account (passed series go there too, one account per platform) */
+  socialSlots: string[];
 };
 
 export const DEFAULT_CONVEYOR: ConveyorSettings = {
@@ -66,6 +68,7 @@ export const DEFAULT_CONVEYOR: ConveyorSettings = {
   filmSlot: "19:30",
   filmAsap: false,
   competitionMaxViews: 300_000,
+  socialSlots: ["10:00", "15:00", "20:00"],
 };
 
 /** Test channels of one geo are shifted against each other so two never upload within half an hour. */
@@ -97,9 +100,9 @@ export async function conveyorGeos(): Promise<Geo[]> {
   return [...new Set(rows.map((r) => r.geo).filter(isGeo))];
 }
 
-const channels = (role: "MAIN" | "TEST", geo?: Geo) =>
+const channels = (role: "MAIN" | "TEST", geo?: Geo, platform: Platform = "YOUTUBE") =>
   db.socialAccount.findMany({
-    where: { platform: "YOUTUBE", role, status: "ACTIVE", geo: geo ?? { in: Object.keys(GEOS) } },
+    where: { platform, role, status: "ACTIVE", geo: geo ?? { in: Object.keys(GEOS) } },
     orderBy: { createdAt: "asc" },
   });
 
@@ -264,7 +267,7 @@ export async function enqueueMain(seriesId: string) {
   const mains = (await channels("MAIN")).filter((m) => series.allowedGeos.includes(m.geo as string));
   if (!mains.length) return [];
   // Already lined up on a main channel, or already out on one (e.g. launched before the conveyor): leave it.
-  if (await db.channelQueueItem.findFirst({ where: { seriesId, account: { role: "MAIN" } } })) return [];
+  if (await db.channelQueueItem.findFirst({ where: { seriesId, account: { role: "MAIN", platform: "YOUTUBE" } } })) return [];
   if (await alreadyOnMain(seriesId)) return [];
   const load = await Promise.all(mains.map(async (m) => ({ m, n: await db.channelQueueItem.count({ where: { accountId: m.id, jobId: null } }) })));
   const target = load.sort((x, y) => x.n - y.n)[0].m;
@@ -329,7 +332,7 @@ async function longEpisode(eps: Episode[], account: SocialAccount) {
  * Short (over 3 min): taken off the line while none of their episodes has been uploaded yet.
  */
 export async function dropLongMain() {
-  const items = await db.channelQueueItem.findMany({ where: { account: { role: "MAIN" } }, include: { account: true, series: { select: { title: true } } }, orderBy: { position: "asc" } });
+  const items = await db.channelQueueItem.findMany({ where: { account: { role: "MAIN", platform: "YOUTUBE" } }, include: { account: true, series: { select: { title: true } } }, orderBy: { position: "asc" } });
   const eps = new Map((await db.episode.findMany({ where: { id: { in: items.map((i) => i.episodeId) } } })).map((e) => [e.id, e]));
   const groups = new Map<string, typeof items>();
   for (const i of items) groups.set(`${i.accountId}|${i.seriesId}`, [...(groups.get(`${i.accountId}|${i.seriesId}`) ?? []), i]);
@@ -394,7 +397,7 @@ async function alreadyOnMain(seriesId: string, exceptAccountId?: string) {
  * its waiting episodes (and jobs not uploaded yet) are dropped from this channel.
  */
 export async function dropMainDuplicates() {
-  const items = await db.channelQueueItem.findMany({ where: { account: { role: "MAIN" } }, include: { series: { select: { title: true } } } });
+  const items = await db.channelQueueItem.findMany({ where: { account: { role: "MAIN", platform: "YOUTUBE" } }, include: { series: { select: { title: true } } } });
   const groups = new Map<string, typeof items>();
   for (const i of items) groups.set(`${i.accountId}|${i.seriesId}`, [...(groups.get(`${i.accountId}|${i.seriesId}`) ?? []), i]);
   const dropped: string[] = [];
@@ -427,7 +430,7 @@ export async function dropMainDuplicates() {
  * Until then the job keeps the original, so a slow render never holds up a slot.
  */
 export async function prepareChannelVersions() {
-  const mains = (await channels("MAIN")).filter((m) => m.editTemplateId);
+  const mains = (await Promise.all(SOCIAL.concat("YOUTUBE").map((p) => channels("MAIN", undefined, p)))).flat().filter((m) => m.editTemplateId);
   let made = 0;
   let attached = 0;
   for (const m of mains) {
@@ -479,7 +482,7 @@ async function backfillMain() {
   if (!mains.length) return;
   const geos = [...new Set(mains.map((m) => m.geo as string))];
   const passed = await db.series.findMany({
-    where: { stage: "IN_WORK", bannedAt: null, mainSkip: null, allowedGeos: { hasSome: geos }, queueItems: { none: { account: { role: "MAIN" } } } },
+    where: { stage: "IN_WORK", bannedAt: null, mainSkip: null, allowedGeos: { hasSome: geos }, queueItems: { none: { account: { role: "MAIN", platform: "YOUTUBE" } } } },
     select: { id: true },
     // Oldest passes first.
     orderBy: { inWorkAt: "asc" },
@@ -488,7 +491,7 @@ async function backfillMain() {
 }
 
 /** Free slots on a main channel for the next days, skipping times it already has a publication near. */
-async function freeMainSlots(account: SocialAccount, s: ConveyorSettings, now: Date, ignore = new Set<string>()) {
+async function freeMainSlots(account: SocialAccount, times: string[], now: Date, ignore = new Set<string>()) {
   const tz = geoTz(account.geo as Geo);
   const today = DateTime.fromJSDate(now, { zone: tz }).startOf("day");
   const until = today.plus({ days: MAIN_DAYS_AHEAD + 1 }).toJSDate();
@@ -499,7 +502,7 @@ async function freeMainSlots(account: SocialAccount, s: ConveyorSettings, now: D
   const busy = taken.filter((b) => !ignore.has(b.id));
   const slots: Date[] = [];
   for (let d = 0; d <= MAIN_DAYS_AHEAD; d++)
-    for (const time of [...s.mainSlots].sort()) {
+    for (const time of [...times].sort()) {
       const t = at(today.plus({ days: d }), time, tz);
       if (t.getTime() < now.getTime() + 20 * 60_000) continue;
       if (busy.some((b) => Math.abs(b.scheduledAt.getTime() - t.getTime()) < SLOT_CLEARANCE_MIN * 60_000)) continue;
@@ -525,97 +528,185 @@ export async function scheduleMain(now = new Date()) {
   await rebalanceMain();
   const pv = s.channelVersions ? await prepareChannelVersions() : { made: 0, attached: 0 };
   if (pv.made || pv.attached) console.log(`[conveyor] channel versions: ${pv.made} new, ${pv.attached} attached`);
-  const created: { account: string; episode: string; at: Date }[] = [];
-  for (const account of await channels("MAIN")) {
-    const tz = geoTz(account.geo as Geo);
-    const items = await db.channelQueueItem.findMany({ where: { accountId: account.id }, orderBy: { position: "asc" }, include: { series: true } });
-    if (!items.length) continue;
-    const jobs = await db.publicationJob.findMany({
-      where: { id: { in: items.flatMap((i) => (i.jobId ? [i.jobId] : [])) } },
-      include: { account: true, assetVersion: { include: { asset: true } } },
-    });
-    const byId = new Map(jobs.map((j) => [j.id, j]));
-    const stuck = new Set<string>(); // uploaded videos YouTube wouldn't move: they stay where they are
-    const kind = (id: string | null) => {
-      const j = id ? byId.get(id) : undefined;
-      if (!j) return "none" as const;
-      if (stuck.has(j.id)) return "fixed" as const;
-      const st = ((j.meta ?? {}) as { adapter?: { scheduledNatively?: boolean; manualOpen?: boolean } }).adapter ?? {};
-      if (j.status === "QUEUED" && !j.externalId && j.scheduledAt.getTime() > now.getTime() + 20 * 60_000) return "queued" as const;
-      if (j.status === "PROCESSING" && j.externalId && st.scheduledNatively && !st.manualOpen && j.scheduledAt.getTime() > now.getTime() + MOVE_UPLOADED_MIN * 60_000)
-        return "uploaded" as const;
-      return "fixed" as const;
-    };
-    const plan = async () => {
-      const seq = items.filter((i) => ["none", "queued", "uploaded"].includes(kind(i.jobId)));
-      const moving = new Set(seq.flatMap((i) => (i.jobId ? [i.jobId] : [])));
-      const fixedMax = Math.max(0, ...jobs.filter((j) => j.status !== "CANCELLED" && !moving.has(j.id)).map((j) => j.scheduledAt.getTime()));
-      const slots = (await freeMainSlots(account, s, now, moving)).filter((t) => t.getTime() > fixedMax);
-      return { seq, slots };
-    };
-    // Uploaded videos move on YouTube first; one that can't be moved stays put and the plan is redone around it.
-    let { seq, slots } = await plan();
-    for (let pass = 0; pass < 3; pass++) {
-      let failed = false;
-      for (const [k, item] of seq.entries()) {
-        const job = item.jobId ? byId.get(item.jobId) : undefined;
-        const slot = slots[k];
-        if (!job || kind(job.id) !== "uploaded" || !slot || job.scheduledAt.getTime() === slot.getTime()) continue;
-        try {
-          await adapterFor(job.account)!.reschedule!(job, ((job.meta as any)?.adapter ?? {}) as Record<string, unknown>, slot);
-          await db.publicationJob.update({
-            where: { id: job.id },
-            data: { scheduledAt: slot, localTime: toLocal(slot, job.timezone), deadlineAt: new Date(slot.getTime() + env().CATCHUP_WINDOW_MIN * 60_000) },
-          });
-          job.scheduledAt = slot;
-        } catch (e) {
-          await notify(`conveyor:${item.id}`, "conveyor", `@${account.handle}: YouTube не дал перенести «${item.series.title}»: ${(e as Error).message.slice(0, 150)}`, "/youtube");
-          stuck.add(job.id);
-          failed = true;
-        }
-      }
-      if (!failed) break;
-      ({ seq, slots } = await plan());
-    }
-    if (!seq.length) continue;
+  const created: Placed[] = [];
+  for (const account of await channels("MAIN")) await placeQueue(account, s.mainSlots, now, created);
+  return created;
+}
+
+type Placed = { account: string; episode: string; at: Date };
+
+/**
+ * One account's line goes out in order, each episode on the earliest free slot after the last fixed one.
+ * Jobs not sent yet move with the line; an uploaded YouTube video with its own publish time is moved on
+ * YouTube; anything else already sent (TikTok, Instagram, manual packages) stays where it is.
+ */
+async function placeQueue(account: SocialAccount, times: string[], now: Date, created: Placed[]) {
+  const tz = geoTz(account.geo as Geo);
+  const items = await db.channelQueueItem.findMany({ where: { accountId: account.id }, orderBy: { position: "asc" }, include: { series: true } });
+  if (!items.length) return;
+  const jobs = await db.publicationJob.findMany({
+    where: { id: { in: items.flatMap((i) => (i.jobId ? [i.jobId] : [])) } },
+    include: { account: true, assetVersion: { include: { asset: true } } },
+  });
+  const byId = new Map(jobs.map((j) => [j.id, j]));
+  const stuck = new Set<string>(); // uploaded videos YouTube wouldn't move: they stay where they are
+  const kind = (id: string | null) => {
+    const j = id ? byId.get(id) : undefined;
+    if (!j) return "none" as const;
+    if (stuck.has(j.id)) return "fixed" as const;
+    const st = ((j.meta ?? {}) as { adapter?: { scheduledNatively?: boolean; manualOpen?: boolean } }).adapter ?? {};
+    // A job the worker may already be sending (inside its adapter's lead time) stays put.
+    const lead = Math.max(20, (adapterFor(account)?.leadMinutes(j) ?? 0) + 10);
+    if (j.status === "QUEUED" && !j.externalId && j.scheduledAt.getTime() > now.getTime() + lead * 60_000) return "queued" as const;
+    if (j.status === "PROCESSING" && j.externalId && st.scheduledNatively && !st.manualOpen && j.scheduledAt.getTime() > now.getTime() + MOVE_UPLOADED_MIN * 60_000)
+      return "uploaded" as const;
+    return "fixed" as const;
+  };
+  const plan = async () => {
+    const seq = items.filter((i) => ["none", "queued", "uploaded"].includes(kind(i.jobId)));
+    const moving = new Set(seq.flatMap((i) => (i.jobId ? [i.jobId] : [])));
+    const fixedMax = Math.max(0, ...jobs.filter((j) => j.status !== "CANCELLED" && !moving.has(j.id)).map((j) => j.scheduledAt.getTime()));
+    const slots = (await freeMainSlots(account, times, now, moving)).filter((t) => t.getTime() > fixedMax);
+    return { seq, slots };
+  };
+  // Uploaded videos move on YouTube first; one that can't be moved stays put and the plan is redone around it.
+  let { seq, slots } = await plan();
+  for (let pass = 0; pass < 3; pass++) {
+    let failed = false;
     for (const [k, item] of seq.entries()) {
-      const slot = slots[k];
       const job = item.jobId ? byId.get(item.jobId) : undefined;
-      if (job) {
-        if (!slot) {
-          if (kind(job.id) === "queued") {
-            await db.publicationJob.update({ where: { id: job.id }, data: { status: "CANCELLED" } });
-            await db.channelQueueItem.update({ where: { id: item.id }, data: { jobId: null } });
-          }
-          continue;
-        }
-        if (job.scheduledAt.getTime() === slot.getTime() || kind(job.id) !== "queued") continue;
+      const slot = slots[k];
+      if (!job || kind(job.id) !== "uploaded" || !slot || job.scheduledAt.getTime() === slot.getTime()) continue;
+      try {
+        await adapterFor(job.account)!.reschedule!(job, ((job.meta as any)?.adapter ?? {}) as Record<string, unknown>, slot);
         await db.publicationJob.update({
           where: { id: job.id },
           data: { scheduledAt: slot, localTime: toLocal(slot, job.timezone), deadlineAt: new Date(slot.getTime() + env().CATCHUP_WINDOW_MIN * 60_000) },
         });
-        continue;
-      }
-      if (!slot) break;
-      const ep = await db.episode.findUnique({ where: { id: item.episodeId } });
-      if (!ep) {
-        await db.channelQueueItem.delete({ where: { id: item.id } });
-        break; // positions shift; the next tick places the rest
-      }
-      try {
-        // ":ep:<id>" + purpose "launch" let the weekly planner count it as already out on this channel.
-        const j = await queueAt(
-          { series: item.series, ep, account, visibility: "PUBLIC", instanceKey: `conveyor:ep:${ep.id}`, meta: { purpose: "launch", conveyor: true } },
-          slot,
-          tz,
-        );
-        await db.channelQueueItem.update({ where: { id: item.id }, data: { jobId: j.id } });
-        created.push({ account: account.handle, episode: `${item.series.title} S${ep.season}E${ep.number}`, at: slot });
+        job.scheduledAt = slot;
       } catch (e) {
-        await notify(`conveyor:${item.id}`, "conveyor", `@${account.handle}: не удалось поставить «${item.series.title}» S${ep.season}E${ep.number}: ${(e as Error).message.slice(0, 150)}`, "/youtube");
-        break; // keep the order: don't jump ahead to the next episode
+        await notify(`conveyor:${item.id}`, "conveyor", `@${account.handle}: YouTube не дал перенести «${item.series.title}»: ${(e as Error).message.slice(0, 150)}`, "/youtube");
+        stuck.add(job.id);
+        failed = true;
       }
     }
+    if (!failed) break;
+    ({ seq, slots } = await plan());
+  }
+  if (!seq.length) return;
+  for (const [k, item] of seq.entries()) {
+    const slot = slots[k];
+    const job = item.jobId ? byId.get(item.jobId) : undefined;
+    if (job) {
+      if (!slot) {
+        if (kind(job.id) === "queued") {
+          await db.publicationJob.update({ where: { id: job.id }, data: { status: "CANCELLED" } });
+          await db.channelQueueItem.update({ where: { id: item.id }, data: { jobId: null } });
+        }
+        continue;
+      }
+      if (job.scheduledAt.getTime() === slot.getTime() || kind(job.id) !== "queued") continue;
+      await db.publicationJob.update({
+        where: { id: job.id },
+        data: { scheduledAt: slot, localTime: toLocal(slot, job.timezone), deadlineAt: new Date(slot.getTime() + env().CATCHUP_WINDOW_MIN * 60_000) },
+      });
+      continue;
+    }
+    if (!slot) break;
+    const ep = await db.episode.findUnique({ where: { id: item.episodeId } });
+    if (!ep) {
+      await db.channelQueueItem.delete({ where: { id: item.id } });
+      break; // positions shift; the next tick places the rest
+    }
+    try {
+      // ":ep:<id>" + purpose "launch" let the weekly planner count it as already out on this channel.
+      const j = await queueAt(
+        { series: item.series, ep, account, visibility: "PUBLIC", instanceKey: `conveyor:ep:${ep.id}`, meta: { purpose: "launch", conveyor: true } },
+        slot,
+        tz,
+      );
+      await db.channelQueueItem.update({ where: { id: item.id }, data: { jobId: j.id } });
+      created.push({ account: account.handle, episode: `${item.series.title} S${ep.season}E${ep.number}`, at: slot });
+    } catch (e) {
+      await notify(`conveyor:${item.id}`, "conveyor", `@${account.handle}: не удалось поставить «${item.series.title}» S${ep.season}E${ep.number}: ${(e as Error).message.slice(0, 150)}`, "/youtube");
+      break; // keep the order: don't jump ahead to the next episode
+    }
+  }
+}
+
+
+/** Platforms that take passed series besides YouTube. Each series goes to ONE account per platform. */
+export const SOCIAL: Platform[] = ["TIKTOK", "INSTAGRAM"];
+/** Episodes waiting per TikTok / Instagram account before the next passed series is lined up. */
+const SOCIAL_LINE_DAYS = 3;
+
+/**
+ * Lines up a passed series on the least busy account of one platform whose geo the series may play in.
+ * Same rules as the YouTube main channels: English only, Shorts length, first N episodes, never twice.
+ */
+export async function enqueueSocial(seriesId: string, platform: Platform, s: ConveyorSettings) {
+  const series = await db.series.findUniqueOrThrow({ where: { id: seriesId }, include: { episodes: { orderBy: [{ season: "asc" }, { number: "asc" }] } } });
+  if (series.contentLang && series.contentLang !== "en") return null;
+  if (await db.channelQueueItem.findFirst({ where: { seriesId, account: { platform } } })) return null;
+  const out = await db.publicationJob.findFirst({
+    where: { platform, status: { notIn: ["CANCELLED", "DRAFT", "BLOCKED", "FAILED"] }, meta: { path: ["seriesId"], equals: seriesId } },
+    select: { id: true },
+  });
+  if (out) return null;
+  const accounts = (await channels("MAIN", undefined, platform)).filter((a) => series.allowedGeos.includes(a.geo as string));
+  if (!accounts.length) return null;
+  const load = await Promise.all(accounts.map(async (a) => ({ a, n: await db.channelQueueItem.count({ where: { accountId: a.id, jobId: null } }) })));
+  const target = load.sort((x, y) => x.n - y.n)[0].a;
+  const eps = series.episodes.slice(0, s.mainEpisodes);
+  const long = await longEpisode(eps, target);
+  if (long) {
+    await db.series.update({ where: { id: seriesId }, data: { mainSkip: long } });
+    return null;
+  }
+  const last = await db.channelQueueItem.findFirst({ where: { accountId: target.id }, orderBy: { position: "desc" } });
+  let pos = (last?.position ?? 0) + 1;
+  for (const ep of eps)
+    await db.channelQueueItem.upsert({
+      where: { accountId_episodeId: { accountId: target.id, episodeId: ep.id } },
+      update: {},
+      create: { accountId: target.id, seriesId, episodeId: ep.id, position: pos++ },
+    });
+  return target;
+}
+
+/**
+ * Worker: TikTok and Instagram accounts (role «Боевой», geo set) get the series that passed the
+ * YouTube test, oldest pass first, a few days' worth at a time, and publish them at their own slots.
+ * Manual TikTok accounts get packages to post by hand; Upload-Post / API accounts post by themselves.
+ */
+export async function scheduleSocial(now = new Date()) {
+  const s = await getConveyorSettings();
+  if (!s.enabled || !s.socialSlots.length) return [];
+  const created: Placed[] = [];
+  for (const platform of SOCIAL) {
+    const accounts = await channels("MAIN", undefined, platform);
+    if (!accounts.length) continue;
+    const want = accounts.length * s.socialSlots.length * SOCIAL_LINE_DAYS;
+    const waiting = () => db.channelQueueItem.count({ where: { accountId: { in: accounts.map((a) => a.id) }, jobId: null } });
+    if ((await waiting()) < want) {
+      const geos = [...new Set(accounts.map((a) => a.geo as string))];
+      const passed = await db.series.findMany({
+        where: {
+          stage: "IN_WORK", bannedAt: null, mainSkip: null, allowedGeos: { hasSome: geos },
+          OR: [{ contentLang: null }, { contentLang: "en" }],
+          queueItems: { none: { account: { platform } } },
+        },
+        select: { id: true },
+        orderBy: { inWorkAt: "asc" },
+        take: 40,
+      });
+      for (const p of passed) {
+        const t = await enqueueSocial(p.id, platform, s);
+        if (t) console.log(`[conveyor] ${platform}: series ${p.id} lined up on @${t.handle}`);
+        if ((await waiting()) >= want) break;
+      }
+    }
+    for (const account of accounts) await placeQueue(account, s.socialSlots, now, created);
   }
   return created;
 }

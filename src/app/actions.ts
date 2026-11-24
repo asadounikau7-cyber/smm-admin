@@ -114,17 +114,23 @@ export async function updateEpisodeTitleAction(f: FormData) {
 }
 
 // ---------- accounts ----------
+/** TikTok (by hand or Upload-Post) or Instagram through Upload-Post. Geo puts the account in the conveyor. */
 export async function addTikTokAccountAction(f: FormData) {
   const u = await requireOwner();
+  const platform = s(f, "platform") === "INSTAGRAM" ? ("INSTAGRAM" as const) : ("TIKTOK" as const);
   const handle = s(f, "handle").replace(/^@/, "");
-  const mode = (s(f, "mode") || "MANUAL") as TikTokMode;
-  const externalId = mode === "PARTNER" ? s(f, "uploadPostProfile") || handle : handle;
+  if (!handle) redirect("/accounts?err=" + encodeURIComponent("Укажите @аккаунт"));
+  const mode = platform === "INSTAGRAM" ? ("PARTNER" as TikTokMode) : ((s(f, "mode") || "MANUAL") as TikTokMode);
+  const profile = s(f, "uploadPostProfile");
+  if (mode === "PARTNER" && !profile) redirect("/accounts?err=" + encodeURIComponent("Укажите имя профиля Upload-Post, где подключён этот аккаунт"));
+  const externalId = mode === "PARTNER" ? profile : handle;
+  const geo = ["US", "UK"].includes(s(f, "geo")) ? s(f, "geo") : null;
   const a = await db.socialAccount.upsert({
-    where: { platform_externalId: { platform: "TIKTOK", externalId } },
-    update: { handle, language: s(f, "language") || null, tiktokMode: mode, status: "ACTIVE" },
-    create: { platform: "TIKTOK", externalId, handle, language: s(f, "language") || null, tiktokMode: mode },
+    where: { platform_externalId: { platform, externalId } },
+    update: { handle, language: s(f, "language") || null, tiktokMode: mode, status: "ACTIVE", geo, role: "MAIN" },
+    create: { platform, externalId, handle, language: s(f, "language") || null, tiktokMode: mode, geo, role: "MAIN" },
   });
-  await audit("account.add", "SocialAccount", a.id, u.id, { platform: "TIKTOK", handle, mode });
+  await audit("account.add", "SocialAccount", a.id, u.id, { platform, handle, mode, geo });
   revalidatePath("/accounts");
 }
 

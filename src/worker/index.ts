@@ -9,7 +9,7 @@ import { runFilms } from "@/lib/films";
 import { flushEmails, notify } from "@/lib/notify";
 import { loadIntegrationKeys } from "@/lib/integrationKeys";
 import { checkSeriesTests, guardMainUploads, recheckPassedSeries } from "@/lib/seriesTest";
-import { scheduleMain, scheduleTests } from "@/lib/conveyor";
+import { scheduleMain, scheduleSocial, scheduleTests } from "@/lib/conveyor";
 import { markSpanishSeries } from "@/lib/language";
 import { agentRenderOnline, claimRender, getRenderMode, renderOnServer } from "@/lib/renderJobs";
 
@@ -133,6 +133,11 @@ async function tick() {
       for (const t of await refreshYoutubeMeta()) console.log(`[youtube] new title: ${t}`);
     } catch (e) {
       console.error("[conveyor]", e);
+    }
+    try {
+      for (const m of await scheduleSocial()) console.log(`[conveyor] ${m.episode} on @${m.account} at ${m.at.toISOString()}`);
+    } catch (e) {
+      console.error("[conveyor social]", e);
     }
   }
   // Channel numbers: hourly, so the morning report and the Stats page are fresh.

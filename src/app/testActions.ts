@@ -128,6 +128,7 @@ export async function saveConveyorSettingsAction(f: FormData) {
     testSlots: times(s(f, "testSlots")),
     jitterMin: num("jitterMin", 0, 30, cur.jitterMin),
     mainSlots: times(s(f, "mainSlots")),
+    socialSlots: f.has("socialSlots") ? times(s(f, "socialSlots")) : cur.socialSlots,
     mainEpisodes: num("mainEpisodes", 1, 50, cur.mainEpisodes),
     backlogDays: num("backlogDays", 1, 60, cur.backlogDays),
     channelVersions: f.get("channelVersions") === "on",

@@ -42,23 +42,21 @@ export default async function AccountsPage({ searchParams }: { searchParams: Pro
                     <form key={`${a.id}-${a.geo}-${a.role}-${a.language}-${a.editTemplateId}`} action={updateAccountAction} className="flex gap-1">
                       <input type="hidden" name="id" value={a.id} />
                       <input name="language" defaultValue={a.language ?? ""} placeholder="en" className="input w-16" />
+                      <select name="geo" defaultValue={a.geo ?? ""} className="input w-20" title="Гео аудитории: без гео аккаунт в конвейере не участвует">
+                        <option value="">гео</option>
+                        <option value="US">US</option>
+                        <option value="UK">UK</option>
+                      </select>
                       {a.platform === "YOUTUBE" && (
-                        <>
-                          <select name="geo" defaultValue={a.geo ?? ""} className="input w-20" title="Гео аудитории канала">
-                            <option value="">гео</option>
-                            <option value="US">US</option>
-                            <option value="UK">UK</option>
-                          </select>
-                          <select name="role" defaultValue={a.role} className="input w-28" title="Роль в YouTube-конвейере">
-                            <option value="MAIN">Боевой</option>
-                            <option value="TEST">Тестовый</option>
-                          </select>
-                          <select name="editTemplateId" defaultValue={a.editTemplateId ?? ""} className="input w-44" title="Шаблон уникализации канала">
-                            <option value="">Без шаблона (оригинал)</option>
-                            {templates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-                          </select>
-                        </>
+                        <select name="role" defaultValue={a.role} className="input w-28" title="Роль в YouTube-конвейере">
+                          <option value="MAIN">Боевой</option>
+                          <option value="TEST">Тестовый</option>
+                        </select>
                       )}
+                      <select name="editTemplateId" defaultValue={a.editTemplateId ?? ""} className="input w-44" title="Шаблон уникализации аккаунта">
+                        <option value="">Без шаблона (оригинал)</option>
+                        {templates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                      </select>
                       {a.platform === "TIKTOK" && (
                         <select name="mode" defaultValue={a.tiktokMode ?? "MANUAL"} className="input w-36">
                           <option value="MANUAL">Вручную (пакет)</option>
@@ -93,20 +91,38 @@ export default async function AccountsPage({ searchParams }: { searchParams: Pro
         </div>
       )}
 
-      <h2 className="mb-2 font-medium">Добавить TikTok</h2>
-      <form action={addTikTokAccountAction} className="card grid gap-3 p-4 md:grid-cols-5 md:items-end">
+      <h2 className="mb-2 font-medium">Добавить TikTok или Instagram</h2>
+      <form action={addTikTokAccountAction} className="card grid gap-3 p-4 md:grid-cols-7 md:items-end">
+        <div>
+          <label className="label">Площадка</label>
+          <select name="platform" className="input">
+            <option value="TIKTOK">TikTok</option>
+            <option value="INSTAGRAM">Instagram (через Upload-Post)</option>
+          </select>
+        </div>
         <div><label className="label">@аккаунт</label><input name="handle" required className="input" placeholder="@channel_en" /></div>
         <div><label className="label">Язык</label><input name="language" className="input" placeholder="en" /></div>
         <div>
-          <label className="label">Режим</label>
-          <select name="mode" className="input">
-            <option value="MANUAL">Вручную: пакет для TikTok Studio</option>
-            <option value="PARTNER">Upload-Post (платно)</option>
+          <label className="label">Гео</label>
+          <select name="geo" className="input" defaultValue="US">
+            <option value="US">US</option>
+            <option value="UK">UK</option>
+            <option value="">без гео (не в конвейере)</option>
           </select>
         </div>
-        <div><label className="label">Профиль Upload-Post</label><input name="uploadPostProfile" className="input" placeholder="только для Upload-Post" /></div>
+        <div>
+          <label className="label">Режим TikTok</label>
+          <select name="mode" className="input" defaultValue="PARTNER">
+            <option value="PARTNER">Upload-Post (сам публикует)</option>
+            <option value="MANUAL">Вручную: пакет для TikTok Studio</option>
+          </select>
+        </div>
+        <div><label className="label">Профиль Upload-Post</label><input name="uploadPostProfile" className="input" placeholder="имя профиля в Upload-Post" /></div>
         <button className="btn btn-primary">Добавить</button>
       </form>
+      <p className="mt-2 text-xs muted">
+        TikTok и Instagram с гео получают сериалы, прошедшие тест на YouTube: каждый сериал на один аккаунт площадки, по слотам из Настроек. В Upload-Post один профиль = один TikTok + один Instagram; профиль можно указать у обоих.
+      </p>
       <p className="mt-2 text-xs muted">
         Аккаунты YouTube и Instagram подключаются через OAuth владельцем аккаунта: пароли не нужны. Пока приложения Google и Meta не прошли проверку, подключать можно только аккаунты, добавленные в тестировщики.
       </p>

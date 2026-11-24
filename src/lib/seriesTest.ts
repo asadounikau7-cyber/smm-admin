@@ -1,4 +1,4 @@
-import { youtubeMeta, YT_META_VERSION } from "./ytMeta";
+import { socialCaption, youtubeMeta, YT_META_VERSION } from "./ytMeta";
 import { createHash } from "node:crypto";
 import type { AssetVersion, Episode, PostFormat, Series, SocialAccount, Visibility } from "@prisma/client";
 import { db } from "./db";
@@ -91,7 +91,6 @@ export type JobInput = {
 
 /** Creates (or re-arms a cancelled/failed) publication: right away, or at `at` (shown in time zone `tz`). */
 export async function queueAt(i: JobInput, at?: Date, tz: string = env().BASE_TIMEZONE) {
-  if (i.account.platform !== "YOUTUBE") throw new Error(`@${i.account.handle} — не YouTube-канал`);
   if (i.account.status !== "ACTIVE") throw new Error(`Канал @${i.account.handle} не подключён (нужно переподключить на странице «Аккаунты»)`);
   const file = await fileFor(i.ep, i.account);
   if (!file) throw new Error(`Нет файла для ${epLabel(i.ep)}`);
@@ -100,25 +99,31 @@ export async function queueAt(i: JobInput, at?: Date, tz: string = env().BASE_TI
   const now = new Date();
   const scheduledAt = at ?? new Date(now.getTime() + 30_000);
   const plan = await getOrCreatePlan(weekStartFor(scheduledAt, env().BASE_TIMEZONE));
-  const { title, description: caption, tags } = youtubeMeta(i.series, i.ep);
+  const platform = i.account.platform;
+  const yt = platform === "YOUTUBE" ? youtubeMeta(i.series, i.ep) : null;
+  const caption = yt ? yt.description : socialCaption(platform as "TIKTOK" | "INSTAGRAM", i.series, i.ep);
+  const title = yt ? yt.title : null;
+  const tags = yt ? yt.tags : [];
+  // A TikTok account without Upload-Post gets a package: someone posts it by hand in TikTok Studio.
+  const manual = platform === "TIKTOK" && i.account.tiktokMode !== "PARTNER";
   const data = {
     accountId: i.account.id,
     assetVersionId: file.version.id,
-    platform: i.account.platform,
-    format: ytFormat(file.version),
+    platform,
+    format: platform === "YOUTUBE" ? ytFormat(file.version) : platform === "TIKTOK" ? ("TT_VIDEO" as const) : ("IG_REEL" as const),
     visibility: i.visibility,
-    status: "QUEUED" as const,
+    status: manual ? ("ACTION_REQUIRED" as const) : ("QUEUED" as const),
     scheduledAt,
     localTime: toLocal(scheduledAt, tz),
     timezone: tz,
     deadlineAt: new Date(scheduledAt.getTime() + 6 * 3600_000),
     caption,
     title,
-    meta: { ...i.meta, tags, ytMeta: YT_META_VERSION, seriesId: i.series.id, episodeId: i.ep.id, assetId: file.asset.id, variantId: file.variant?.id ?? null, variantCode: file.variant?.code ?? null },
+    meta: { ...i.meta, tags, ...(yt ? { ytMeta: YT_META_VERSION } : {}), seriesId: i.series.id, episodeId: i.ep.id, assetId: file.asset.id, variantId: file.variant?.id ?? null, variantCode: file.variant?.code ?? null },
     externalId: null,
     externalUrl: null,
-    errorCode: null,
-    errorMessage: null,
+    errorCode: manual ? "MANUAL" : null,
+    errorMessage: manual ? "Поставьте пост в TikTok Studio по пакету" : null,
     attemptCount: 0,
     nextAttemptAt: null,
     leaseUntil: null,

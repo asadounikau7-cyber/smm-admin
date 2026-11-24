@@ -13,6 +13,7 @@ export default async function YouTubeConveyorPage() {
   const channels = await db.socialAccount.findMany({ where: { platform: "YOUTUBE" }, include: { octoProfile: { select: { title: true } } }, orderBy: [{ role: "asc" }, { geo: "asc" }, { createdAt: "asc" }] });
   const tests = channels.filter((c) => c.role === "TEST" && isGeo(c.geo) && c.status === "ACTIVE");
   const mains = channels.filter((c) => c.role === "MAIN" && isGeo(c.geo) && c.status === "ACTIVE");
+  const social = (await db.socialAccount.findMany({ where: { platform: { in: ["TIKTOK", "INSTAGRAM"] }, role: "MAIN", status: "ACTIVE" }, orderBy: [{ platform: "asc" }, { createdAt: "asc" }] })).filter((c) => isGeo(c.geo));
   const since = new Date(Date.now() - 24 * 3600_000);
   const testJobs = await db.publicationJob.findMany({
     where: { accountId: { in: tests.map((t) => t.id) }, meta: { path: ["purpose"], equals: "test" }, scheduledAt: { gte: since } },
@@ -22,7 +23,7 @@ export default async function YouTubeConveyorPage() {
   const seriesById = new Map((await db.series.findMany({ where: { id: { in: seriesIds } } })).map((x) => [x.id, x]));
   const queued = await db.series.findMany({ where: { testQueuedAt: { not: null }, stage: { not: "TESTING" } }, orderBy: { testQueuedAt: "asc" }, take: 50 });
   const items = await db.channelQueueItem.findMany({
-    where: { accountId: { in: mains.map((m) => m.id) } },
+    where: { accountId: { in: [...mains, ...social].map((m) => m.id) } },
     include: { series: { select: { title: true } } },
     orderBy: { position: "asc" },
   });
@@ -32,6 +33,36 @@ export default async function YouTubeConveyorPage() {
   const eps = new Map((await db.episode.findMany({ where: { id: { in: items.map((i) => i.episodeId) } } })).map((e) => [e.id, e]));
   const backlog = await backlogDays(null, s);
   const fmt = (d: Date, tz: string) => DateTime.fromJSDate(d, { zone: tz }).setLocale("ru").toFormat("ccc d LLL, HH:mm");
+
+  const queueCard = (m: (typeof social)[number], showBacklog: boolean) => {
+              const tz = GEOS[m.geo as keyof typeof GEOS].tz;
+              const mine = items.filter((i) => i.accountId === m.id);
+              const open = mine.filter((i) => !i.jobId || !["PUBLISHED", "CANCELLED"].includes(jobs.get(i.jobId)?.status ?? ""));
+              return (
+                <div key={m.id} className="card p-4 text-sm">
+                  <div className="mb-2 font-medium">{m.platform !== "YOUTUBE" && <span className="muted">{m.platform === "TIKTOK" ? "TikTok" : "Instagram"} </span>}@{m.handle} <span className="muted text-xs">{m.geo} · ждут {mine.filter((i) => !i.jobId).length} серий{showBacklog && Number.isFinite(backlog) ? `, общая очередь ≈ ${backlog.toFixed(1)} дн.` : ""}</span></div>
+                  {open.length === 0 ? (
+                    <div className="muted text-xs">Очередь пуста.</div>
+                  ) : (
+                    <ul className="space-y-1">
+                      {open.slice(0, 15).map((i) => {
+                        const j = i.jobId ? jobs.get(i.jobId) : null;
+                        const ep = eps.get(i.episodeId);
+                        const manual = j && (j.meta as any)?.adapter?.manualOpen;
+                        return (
+                          <li key={i.id} className="flex flex-wrap items-center gap-2">
+                            <span className="muted whitespace-nowrap">{j ? fmt(j.scheduledAt, tz) : "ждёт слота"}</span>
+                            <span>{i.series.title} · S{ep?.season}E{ep?.number}</span>
+                            {j && <Link href={`/publications/${j.id}`}><StatusBadge status={j.status} /></Link>}
+                            {manual && j?.externalId && <a className="btn btn-sm btn-primary" target="_blank" href={studioEditUrl(j.externalId)}>Открыть в Studio</a>}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                </div>
+              );
+  };
 
   return (
     <div className="max-w-5xl space-y-6">
@@ -146,36 +177,20 @@ export default async function YouTubeConveyorPage() {
           <Empty>Нет боевых каналов с гео.</Empty>
         ) : (
           <div className="grid gap-3 md:grid-cols-2">
-            {mains.map((m) => {
-              const tz = GEOS[m.geo as keyof typeof GEOS].tz;
-              const mine = items.filter((i) => i.accountId === m.id);
-              const open = mine.filter((i) => !i.jobId || !["PUBLISHED", "CANCELLED"].includes(jobs.get(i.jobId)?.status ?? ""));
-              return (
-                <div key={m.id} className="card p-4 text-sm">
-                  <div className="mb-2 font-medium">@{m.handle} <span className="muted text-xs">{m.geo} · ждут {mine.filter((i) => !i.jobId).length} серий{Number.isFinite(backlog) ? `, общая очередь ≈ ${backlog.toFixed(1)} дн.` : ""}</span></div>
-                  {open.length === 0 ? (
-                    <div className="muted text-xs">Очередь пуста.</div>
-                  ) : (
-                    <ul className="space-y-1">
-                      {open.slice(0, 15).map((i) => {
-                        const j = i.jobId ? jobs.get(i.jobId) : null;
-                        const ep = eps.get(i.episodeId);
-                        const manual = j && (j.meta as any)?.adapter?.manualOpen;
-                        return (
-                          <li key={i.id} className="flex flex-wrap items-center gap-2">
-                            <span className="muted whitespace-nowrap">{j ? fmt(j.scheduledAt, tz) : "ждёт слота"}</span>
-                            <span>{i.series.title} · S{ep?.season}E{ep?.number}</span>
-                            {j && <Link href={`/publications/${j.id}`}><StatusBadge status={j.status} /></Link>}
-                            {manual && j?.externalId && <a className="btn btn-sm btn-primary" target="_blank" href={studioEditUrl(j.externalId)}>Открыть в Studio</a>}
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  )}
-                </div>
-              );
-            })}
+            {mains.map((m) => queueCard(m, true))}
           </div>
+        )}
+      </section>
+
+      <section>
+        <h2 className="mb-2 font-medium">TikTok и Instagram</h2>
+        {social.length === 0 ? (
+          <Empty>Нет аккаунтов TikTok или Instagram с гео. Добавьте их на странице «Аккаунты»: они получат сериалы, прошедшие тест на YouTube.</Empty>
+        ) : (
+          <>
+            <p className="mb-2 text-xs muted">Слоты {s.socialSlots.join(", ") || "не заданы"}, первые {s.mainEpisodes} серии; каждый сериал на один аккаунт площадки. TikTok «вручную» получает пакет для TikTok Studio.</p>
+            <div className="grid gap-3 md:grid-cols-2">{social.map((m) => queueCard(m, false))}</div>
+          </>
         )}
       </section>
     </div>

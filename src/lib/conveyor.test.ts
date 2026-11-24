@@ -7,11 +7,11 @@ import { DateTime } from "luxon";
 import { db } from "./db";
 import { encryptJson } from "./crypto";
 import { importRegistry, type Registry } from "./registry";
-import { DEFAULT_CONVEYOR, dropLongMain, dropMainDuplicates, enqueueMain, prepareChannelVersions, rebalanceMain, releaseTestsOnMainChannels, saveConveyorSettings, scheduleMain, scheduleTests, testTimes } from "./conveyor";
+import { DEFAULT_CONVEYOR, dropLongMain, dropMainDuplicates, enqueueMain, prepareChannelVersions, rebalanceMain, releaseTestsOnMainChannels, saveConveyorSettings, scheduleMain, scheduleSocial, scheduleTests, testTimes } from "./conveyor";
 import { checkSeriesTests, guardMainUploads, markTestPassed, saveYtTestSettings, startSeriesTest, stopSeriesAfterRemoval } from "./seriesTest";
 
 const SLUGS = ["conv-a", "conv-b", "conv-c", "conv-d", "conv-e"];
-const EXT = ["cv_t_us1", "cv_t_us2", "cv_m_us", "cv_m_uk", "cv_m_us2"];
+const EXT = ["cv_t_us1", "cv_t_us2", "cv_m_us", "cv_m_uk", "cv_m_us2", "cv_tt_us", "cv_tt_us2", "cv_ig_us"];
 const reg: Registry = {
   verified_at_utc: "2026-11-06T18:00:00Z",
   series: SLUGS.map((id) => ({
@@ -363,6 +363,47 @@ describe("YouTube conveyor", () => {
     expect(s.stage).toBe("TEST_FAILED");
     expect(s.testNote).toContain("правил сообщества");
     await db.publicationJob.deleteMany({ where: { id: { in: [removed.id, ...later.map((x) => x.id)] } } });
+  });
+
+  it("TikTok and Instagram get passed series, one account per platform, with their own captions", async () => {
+    const e = ids["conv-e"];
+    await db.series.update({ where: { id: e }, data: { stage: "IN_WORK", inWorkAt: new Date(0), allowedGeos: ["US"], mainSkip: null, contentLang: null, hookTitle: "She married the wrong brother" } });
+    const tt = (ext: string) => db.socialAccount.create({ data: { platform: "TIKTOK", externalId: ext, handle: ext, language: "en", geo: "US", role: "MAIN", tiktokMode: "MANUAL" } });
+    ids.cv_tt_us = (await tt("cv_tt_us")).id;
+    ids.cv_tt_us2 = (await tt("cv_tt_us2")).id;
+    ids.cv_ig_us = (await db.socialAccount.create({ data: { platform: "INSTAGRAM", externalId: "cv_ig_us", handle: "cv_ig_us", language: "en", geo: "US", role: "MAIN", tiktokMode: "PARTNER" } })).id;
+
+    const placed = await scheduleSocial(now);
+    expect(placed.length).toBeGreaterThan(0);
+    // The oldest pass (conv-e) goes to exactly one TikTok account and one Instagram account.
+    const onTikTok = await db.channelQueueItem.findMany({ where: { seriesId: e, account: { platform: "TIKTOK" } } });
+    expect(new Set(onTikTok.map((i) => i.accountId)).size).toBe(1);
+    expect(onTikTok).toHaveLength(DEFAULT_CONVEYOR.mainEpisodes);
+    expect(await db.channelQueueItem.count({ where: { seriesId: e, accountId: ids.cv_ig_us } })).toBe(DEFAULT_CONVEYOR.mainEpisodes);
+    // No series sits on both TikTok accounts.
+    const all = await db.channelQueueItem.findMany({ where: { accountId: { in: [ids.cv_tt_us, ids.cv_tt_us2] } } });
+    const owner = new Map<string, string>();
+    for (const i of all) {
+      expect(owner.get(i.seriesId) ?? i.accountId).toBe(i.accountId);
+      owner.set(i.seriesId, i.accountId);
+    }
+    // Manual TikTok gets a package; Instagram through Upload-Post is queued to post by itself.
+    const first = await db.publicationJob.findFirstOrThrow({ where: { accountId: onTikTok[0].accountId, meta: { path: ["seriesId"], equals: e } }, orderBy: { scheduledAt: "asc" } });
+    expect(first.status).toBe("ACTION_REQUIRED");
+    expect(first.format).toBe("TT_VIDEO");
+    expect(first.caption).toContain("She married the wrong brother | Part 1");
+    expect(first.caption).toContain("#fyp");
+    expect(local(first.scheduledAt).toFormat("HH:mm")).toBe("10:00");
+    const ig = await db.publicationJob.findFirstOrThrow({ where: { accountId: ids.cv_ig_us, meta: { path: ["seriesId"], equals: e } }, orderBy: { scheduledAt: "asc" } });
+    expect(ig.status).toBe("QUEUED");
+    expect(ig.format).toBe("IG_REEL");
+    // The YouTube side neither drops these lines nor is blocked by them.
+    const before = await db.channelQueueItem.count({ where: { account: { platform: { in: ["TIKTOK", "INSTAGRAM"] } } } });
+    await scheduleMain(now);
+    expect(await db.channelQueueItem.count({ where: { account: { platform: { in: ["TIKTOK", "INSTAGRAM"] } } } })).toBe(before);
+    expect(await db.channelQueueItem.count({ where: { seriesId: e, account: { platform: "YOUTUBE", role: "MAIN" } } })).toBeGreaterThan(0);
+    // A second run changes nothing.
+    expect(await scheduleSocial(now)).toHaveLength(0);
   });
 
   it("jitter never puts a test before 09:00", () => {

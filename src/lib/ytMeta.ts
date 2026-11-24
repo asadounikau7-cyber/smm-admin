@@ -43,3 +43,27 @@ export function youtubeMeta(series: Pick<Series, "title" | "synopsis" | "hashtag
   }
   return { title, description, tags };
 }
+
+const SOCIAL_HASHTAGS: Record<"TIKTOK" | "INSTAGRAM", string[]> = {
+  TIKTOK: ["#drama", "#shortdrama", "#minidrama", "#dramatok", "#fyp"],
+  INSTAGRAM: ["#drama", "#shortdrama", "#minidrama", "#reels", "#dramaseries"],
+};
+
+/**
+ * Caption for a TikTok post or an Instagram Reel of one episode: the hook (or the series name) with
+ * "Part N", the series name, where the next part is, and hashtags. No title field on these platforms.
+ */
+export function socialCaption(
+  platform: "TIKTOK" | "INSTAGRAM",
+  series: Pick<Series, "title" | "hashtags"> & { hookTitle?: string | null },
+  ep: Pick<Episode, "season" | "number">,
+) {
+  const name = clean(series.title);
+  const part = ep.season > 1 ? `Season ${ep.season} Part ${ep.number}` : `Part ${ep.number}`;
+  const head = series.hookTitle ? clean(series.hookTitle) : name;
+  const next = ep.number === 1 ? "Follow for Part 2 👀" : "Part 1 is on the profile. Follow for more!";
+  const own = (series.hashtags ?? "").split(/\s+/).filter((h) => /^#\w+/.test(h)).map((h) => h.toLowerCase());
+  const tags = [...new Set([...SOCIAL_HASHTAGS[platform], ...own])].slice(0, platform === "INSTAGRAM" ? 30 : 8).join(" ");
+  const lines = [`${head} | ${part}`, series.hookTitle ? name : null, next, "", tags].filter((l): l is string => l !== null);
+  return lines.join("\n").slice(0, 2100);
+}
