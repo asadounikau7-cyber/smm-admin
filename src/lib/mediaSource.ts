@@ -22,7 +22,7 @@ export async function mediaUrl(asset: A, version: V, ttlSec = 3600, opts: { inte
   await ensureB2Keys();
   if (isLocalKey(asset.objectKey)) return opts.internal ? renderPath(version.versionKey) : renderPublicUrl(version.versionKey, ttlSec);
   // Catalog links (b2_download_file_by_id) with an application key: the same link, with a token.
-  if (asset.publicUrl && isB2Download(asset.publicUrl) && b2KeySet()) return b2SignedUrl(asset.publicUrl);
+  if (asset.publicUrl && isB2Download(asset.publicUrl) && b2KeySet()) return b2SignedUrl(asset.publicUrl, asset.objectKey);
   if (b2Configured()) return presign(asset.objectKey, version.versionKey, ttlSec);
   if (asset.publicUrl) return asset.publicUrl;
   throw new Error("Нет доступа к файлу: не настроен ключ B2 и нет публичной ссылки");
