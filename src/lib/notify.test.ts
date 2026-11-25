@@ -2,6 +2,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { db } from "./db";
 import { classifyHttp } from "./adapters/types";
 import { errorSignature, flushEmails, notify } from "./notify";
+import { removalHint } from "./adapters/youtube";
 
 const KEYS = ["nt:job", "nt:outage"];
 afterAll(async () => {
@@ -10,6 +11,13 @@ afterAll(async () => {
 });
 
 describe("alerts", () => {
+  it("a YouTube removal reason is explained", () => {
+    expect(removalHint("This video has been removed for violating YouTube's Terms of Service")).toContain("Условий использования");
+    expect(removalHint("Оно было удалено за нарушение Условий использования YouTube.")).toContain("спам");
+    expect(removalHint("This video has been removed for violating YouTube's Community Guidelines")).toContain("страйк");
+    expect(removalHint(null)).toContain("почту канала");
+  });
+
   it("the same failure on different jobs has one signature", () => {
     const a = errorSignature('Google token: {"error":"invalid_client","error_description":"Client missing a project id."}');
     expect(a).toBe(errorSignature('Google token: {"error":"invalid_client","error_description":"Client missing a project id."}'));

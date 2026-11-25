@@ -121,7 +121,8 @@ async function applyError(job: PublicationJob, err: AdapterError) {
   await outage();
   if (err.kind === "MODERATION" && job.platform === "YOUTUBE" && /не найден/i.test(err.message)) {
     const { stopSeriesAfterRemoval } = await import("./seriesTest");
-    await stopSeriesAfterRemoval(job.id, err.message).catch((e) => console.warn(`[removal] ${job.id}: ${(e as Error).message}`));
+    const stopped = await stopSeriesAfterRemoval(job.id, err.message).catch((e) => console.warn(`[removal] ${job.id}: ${(e as Error).message}`));
+    if (stopped) return; // the series alert already says it all (and goes out by email at once)
   }
   const label = status === "UNKNOWN" ? "Результат публикации неизвестен, проверьте вручную" : status === "FAILED" ? "Ошибка публикации" : "Отклонено площадкой";
   await notify(`job:${job.id}`, err.kind.toLowerCase(), `${label}: ${err.message.slice(0, 200)}`, link);

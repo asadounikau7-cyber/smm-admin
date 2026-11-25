@@ -464,9 +464,12 @@ export async function stopSeriesAfterRemoval(jobId: string, reason: string, now 
   for (const j of pending) await db.publicationJob.update({ where: { id: j.id }, data: { status: j.externalId ? "CANCEL_PENDING" : "CANCELLED", nextAttemptAt: null } });
   await db.channelQueueItem.deleteMany({ where: { seriesId: meta.seriesId } });
   const ep = meta.episodeId ? await db.episode.findUnique({ where: { id: meta.episodeId } }) : null;
-  const note = `YouTube удалил серию ${ep?.number ?? "?"} на @${job.account.handle} (${reason}). Проверьте почту канала: скорее всего нарушение правил сообщества. Сериал снят со всех каналов`;
+  const { ytPublicReason, removalHint } = await import("./adapters/youtube");
+  const why = removalHint(job.externalId ? await ytPublicReason(job.externalId) : null);
+  const note = `YouTube удалил серию ${ep?.number ?? "?"} на @${job.account.handle}. ${why}. Сериал снят со всех каналов, его место заняли следующие сериалы`;
   await db.series.update({ where: { id: series.id }, data: { stage: "TEST_FAILED", testNote: note } });
   await audit("main.series.removed", "PublicationJob", job.id, null, { note, cancelled: pending.map((j) => j.id) });
   await notify(`series-removed:${series.id}`, "removal", `«${series.title}»: ${note}`, `/publications/${job.id}`);
+  await db.publicationJob.update({ where: { id: job.id }, data: { errorMessage: `Удалён YouTube: ${why}`.slice(0, 1000) } });
   return { note, cancelled: pending.length };
 }

@@ -517,6 +517,35 @@ export async function deleteTestUploads(accountId: string, userId: string | null
 
 /** Public numbers of one channel right now: channel totals plus likes/comments over its public videos. */
 /** Whether the channel may upload videos longer than 15 minutes (phone-verified): "allowed", "eligible" or "disallowed". */
+/**
+ * Why a video is gone, as YouTube tells any viewer (the API only says "not found"): the public watch page
+ * carries the reason, e.g. "This video has been removed for violating YouTube's Terms of Service".
+ */
+export async function ytPublicReason(videoId: string): Promise<string | null> {
+  if (process.env.VITEST) return null;
+  try {
+    const res = await fetch(`https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}&hl=en&gl=US`, {
+      headers: { "accept-language": "en-US,en;q=0.9", "user-agent": "Mozilla/5.0" },
+      signal: AbortSignal.timeout(15_000),
+    });
+    const html = await res.text();
+    const m = html.match(/"playabilityStatus":\{"status":"(\w+)"(?:,"reason":"((?:[^"\\]|\\.)*)")?/);
+    if (!m || m[1] === "OK") return null;
+    return m[2] ? JSON.parse(`"${m[2]}"`) : m[1];
+  } catch {
+    return null;
+  }
+}
+
+/** The reason in plain Russian with what it means for the channel. */
+export function removalHint(reason: string | null) {
+  if (!reason) return "Причину YouTube не показал: проверьте почту канала и Studio";
+  if (/community guidelines|правил сообщества/i.test(reason)) return `«${reason}»: нарушение правил сообщества. Это предупреждение, вторая такая же за 90 дней даёт страйк`;
+  if (/terms of service|условий использования/i.test(reason)) return `«${reason}»: нарушение Условий использования (обычно спам, повторно использованный контент или обман). Подробности в почте канала и в Studio`;
+  if (/copyright|авторск/i.test(reason)) return `«${reason}»: жалоба правообладателя`;
+  return `«${reason}»`;
+}
+
 export async function ytLongUploads(account: SocialAccount): Promise<string> {
   const { body } = await api(account, "channels?part=status&mine=true");
   return String(body.items?.[0]?.status?.longUploadsStatus ?? "unknown");

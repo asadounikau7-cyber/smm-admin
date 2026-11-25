@@ -362,7 +362,8 @@ describe("YouTube conveyor", () => {
     expect(await db.channelQueueItem.count({ where: { seriesId: d } })).toBe(0);
     const s = await db.series.findUniqueOrThrow({ where: { id: d } });
     expect(s.stage).toBe("TEST_FAILED");
-    expect(s.testNote).toContain("правил сообщества");
+    expect(s.testNote).toContain("почту канала");
+    expect((await db.publicationJob.findUniqueOrThrow({ where: { id: removed.id } })).errorMessage).toContain("Удалён YouTube");
     await db.publicationJob.deleteMany({ where: { id: { in: [removed.id, ...later.map((x) => x.id)] } } });
   });
 
