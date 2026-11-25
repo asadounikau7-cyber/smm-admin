@@ -1,12 +1,14 @@
 import Link from "next/link";
 import { db } from "@/lib/db";
 import { PageHeader, PlatformTag, StatusBadge, Empty } from "@/components/ui";
-import { resolveNotificationAction } from "@/app/actions";
+import { recoverFailedAction, resolveNotificationAction } from "@/app/actions";
+import { recoverableWhere } from "@/lib/recover";
 import { studioEditUrl } from "@/lib/adapters/youtube";
 import { ChannelStatsTable, StatsLink } from "@/components/channelStats";
 
-export default async function Dashboard() {
-  const [issues, notes, upcoming, lastSync, manual, counts, studio] = await Promise.all([
+export default async function Dashboard({ searchParams }: { searchParams: Promise<{ ok?: string }> }) {
+  const sp = await searchParams;
+  const [issues, notes, upcoming, lastSync, manual, counts, studio, recoverable, issueCount] = await Promise.all([
     db.publicationJob.findMany({
       where: { status: { in: ["ACTION_REQUIRED", "FAILED", "UNKNOWN", "CANCEL_PENDING"] }, OR: [{ errorCode: null }, { errorCode: { not: "MANUAL" } }] },
       include: { account: true },
@@ -29,6 +31,8 @@ export default async function Dashboard() {
       orderBy: { scheduledAt: "asc" },
       take: 50,
     }),
+    db.publicationJob.count({ where: recoverableWhere }),
+    db.publicationJob.count({ where: { status: { in: ["ACTION_REQUIRED", "FAILED", "UNKNOWN", "CANCEL_PENDING"] }, OR: [{ errorCode: null }, { errorCode: { not: "MANUAL" } }] } }),
   ]);
   const c = Object.fromEntries(counts.map((x) => [x.status, x._count])) as Record<string, number>;
   const sent = (c.PUBLISHED ?? 0) + (c.FAILED ?? 0) + (c.UNKNOWN ?? 0);
@@ -79,7 +83,16 @@ export default async function Dashboard() {
         </section>
       )}
 
-      <h2 className="mb-2 font-medium">Очередь исключений</h2>
+      {sp.ok && <div className="card mb-4 p-3 text-sm">{sp.ok}</div>}
+      <div className="mb-2 flex flex-wrap items-center gap-3">
+        <h2 className="font-medium">Очередь исключений{issueCount ? ` · ${issueCount}` : ""}</h2>
+        {recoverable > 0 && (
+          <form action={recoverFailedAction} className="ml-auto flex items-center gap-2">
+            <span className="text-xs muted">Упали не по вине площадки: {recoverable}</span>
+            <button className="btn btn-sm btn-primary">Перезапустить упавшие</button>
+          </form>
+        )}
+      </div>
       {issues.length === 0 && notes.length === 0 ? (
         <Empty>Всё в порядке: нет задач, требующих вмешательства.</Empty>
       ) : (

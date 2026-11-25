@@ -372,6 +372,20 @@ export async function retryJobAction(f: FormData) {
   revalidatePath("/publications");
 }
 
+/** «Перезапустить упавшие» on the dashboard: everything that failed on our side goes back (see recover.ts). */
+export async function recoverFailedAction() {
+  const u = await requireOwner();
+  const { recoverFailedJobs } = await import("@/lib/recover");
+  const r = await recoverFailedJobs();
+  await audit("job.recover", "PublicationJob", null, u.id, r);
+  revalidatePath("/");
+  revalidatePath("/publications");
+  redirect(
+    "/?ok=" +
+      encodeURIComponent(`Перезапущено: сверка залитых ${r.reconcile}, боевые в очередь ${r.mainLine}, тесты заново ${r.retests} сериалов, повтор ${r.retried}; скрыто уведомлений ${r.notes}`),
+  );
+}
+
 export async function manualStatusAction(f: FormData) {
   const u = await requireUser();
   const job = await db.publicationJob.findUniqueOrThrow({ where: { id: s(f, "id") } });

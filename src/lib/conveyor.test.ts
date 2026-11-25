@@ -8,6 +8,7 @@ import { db } from "./db";
 import { encryptJson } from "./crypto";
 import { importRegistry, type Registry } from "./registry";
 import { DEFAULT_CONVEYOR, dropLongMain, dropMainDuplicates, enqueueMain, prepareChannelVersions, rebalanceMain, releaseTestsOnMainChannels, saveConveyorSettings, scheduleMain, scheduleSocial, scheduleTests, testTimes } from "./conveyor";
+import { recoverFailedJobs } from "./recover";
 import { checkSeriesTests, guardMainUploads, markTestPassed, saveYtTestSettings, startSeriesTest, stopSeriesAfterRemoval } from "./seriesTest";
 
 const SLUGS = ["conv-a", "conv-b", "conv-c", "conv-d", "conv-e"];
@@ -404,6 +405,39 @@ describe("YouTube conveyor", () => {
     expect(await db.channelQueueItem.count({ where: { seriesId: e, account: { platform: "YOUTUBE", role: "MAIN" } } })).toBeGreaterThan(0);
     // A second run changes nothing.
     expect(await scheduleSocial(now)).toHaveLength(0);
+  });
+
+  it("after an outage failed jobs come back: main episodes to their place in the line, uploads only rechecked, tests queued again", async () => {
+    const line = await db.channelQueueItem.findMany({ where: { accountId: ids.cv_m_us, jobId: { not: null } }, orderBy: { position: "asc" } });
+    const lineJobs = await db.publicationJob.findMany({ where: { id: { in: line.map((i) => i.jobId!) }, status: "QUEUED", externalId: null }, orderBy: { scheduledAt: "asc" } });
+    expect(lineJobs.length).toBeGreaterThan(1);
+    const [uploaded, main] = lineJobs;
+    const firstSlot = main.scheduledAt.getTime();
+    const err = { status: "FAILED" as const, errorCode: "TRANSIENT", errorMessage: "Google token: invalid_client" };
+    await db.publicationJob.update({ where: { id: main.id }, data: err });
+    await db.publicationJob.update({ where: { id: uploaded.id }, data: { ...err, externalId: "vid123" } });
+    await db.series.deleteMany({ where: { slug: "conv-outage" } });
+    const series = await db.series.create({ data: { slug: "conv-outage", title: "Conv outage", stage: "TESTING" } });
+    const test = await db.publicationJob.update({
+      where: { id: (await db.publicationJob.findFirstOrThrow({ where: { accountId: ids.cv_t_us1, status: { not: "CANCELLED" } } })).id },
+      data: { ...err, externalId: null, meta: { purpose: "test", seriesId: series.id } },
+    });
+    await db.series.update({ where: { id: series.id }, data: { testJobId: test.id } });
+    await db.notification.create({ data: { dedupKey: `job:${main.id}`, kind: "transient", message: "Ошибка публикации: invalid_client" } });
+
+    const r = await recoverFailedJobs(now);
+    expect(r).toMatchObject({ reconcile: 1, mainLine: 1, retests: 1 });
+    expect(r.notes).toBeGreaterThanOrEqual(1);
+    expect(await db.publicationJob.findUniqueOrThrow({ where: { id: uploaded.id } })).toMatchObject({ status: "PROCESSING", externalId: "vid123", errorCode: null });
+    expect((await db.publicationJob.findUniqueOrThrow({ where: { id: test.id } })).status).toBe("CANCELLED");
+    expect(await db.series.findUniqueOrThrow({ where: { id: series.id } })).toMatchObject({ stage: "NEW", testJobId: null, testQueuedAt: test.scheduledAt });
+    // The conveyor gives the main episode its first free slot again, not a far-off date.
+    await scheduleMain(now);
+    const back = await db.publicationJob.findUniqueOrThrow({ where: { id: main.id } });
+    expect(back.status).toBe("QUEUED");
+    expect(back.scheduledAt.getTime()).toBeLessThanOrEqual(firstSlot);
+    expect(await recoverFailedJobs(now)).toMatchObject({ reconcile: 0, mainLine: 0, retests: 0, retried: 0 });
+    await db.series.delete({ where: { id: series.id } });
   });
 
   it("jitter never puts a test before 09:00", () => {
