@@ -407,9 +407,12 @@ export async function saveSettingsAction(f: FormData) {
 
 export async function saveIntegrationKeysAction(f: FormData) {
   const u = await requireOwner();
-  const { INTEGRATION_KEYS, saveIntegrationKeys } = await import("@/lib/integrationKeys");
+  const { INTEGRATION_KEYS, invalidKeys, saveIntegrationKeys } = await import("@/lib/integrationKeys");
   const values = Object.fromEntries(INTEGRATION_KEYS.map((k) => [k, s(f, k)]));
   const clear = INTEGRATION_KEYS.filter((k) => f.get(`clear_${k}`) === "on");
+  const bad = invalidKeys(values);
+  if (bad.length)
+    redirect("/settings?err=" + encodeURIComponent(`Не сохранено: не похоже на настоящий ключ — ${bad.join(", ")}. Возможно, браузер подставил туда пароль; очистите поле и вставьте ключ заново`));
   await saveIntegrationKeys(values, clear);
   await audit("settings.keys", "Setting", "integrationKeys", u.id, { set: INTEGRATION_KEYS.filter((k) => values[k]), clear });
   revalidatePath("/settings");

@@ -146,7 +146,18 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
                     {group} · {label}{" "}
                     {fromDb ? <span className="text-green-600">задан здесь {hint(fromDb)}</span> : fromFile ? <span className="text-green-600">задан в .env {hint(fromFile)}</span> : <span>не задан</span>}
                   </label>
-                  <input name={k} type={k.endsWith("_ID") ? "text" : "password"} autoComplete="off" className="input" placeholder={fromDb || fromFile ? "оставьте пустым, чтобы не менять" : ""} />
+                  {/* Text, masked by CSS: browsers don't put saved passwords into text fields. */}
+                  <input
+                    name={k}
+                    type="text"
+                    autoComplete="off"
+                    spellCheck={false}
+                    data-1p-ignore
+                    data-lpignore="true"
+                    className="input"
+                    style={k.endsWith("_ID") ? undefined : ({ WebkitTextSecurity: "disc" } as React.CSSProperties)}
+                    placeholder={fromDb || fromFile ? "оставьте пустым, чтобы не менять" : ""}
+                  />
                   {fromDb && (
                     <label className="mt-1 flex items-center gap-1.5 text-xs muted"><input type="checkbox" name={`clear_${k}`} /> удалить</label>
                   )}

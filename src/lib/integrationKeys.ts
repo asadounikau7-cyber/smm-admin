@@ -5,6 +5,28 @@ import { setEnvOverrides, type Env } from "./env";
 /** Keys the owner can enter in «Настройки» instead of editing .env on the server. */
 export const INTEGRATION_KEYS = ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "INSTAGRAM_APP_ID", "INSTAGRAM_APP_SECRET", "UPLOAD_POST_API_KEY", "B2_KEY_ID", "B2_APP_KEY"] as const;
 export type IntegrationKey = (typeof INTEGRATION_KEYS)[number];
+
+/**
+ * What each key looks like. A value that doesn't fit is refused, so a password the browser slipped
+ * into a field (it happened with the Google secret on 2026-11-24) never replaces a working key.
+ */
+const KEY_FORMAT: Record<IntegrationKey, RegExp> = {
+  GOOGLE_CLIENT_ID: /^[\w-]+\.apps\.googleusercontent\.com$/,
+  GOOGLE_CLIENT_SECRET: /^(GOCSPX-)?[\w-]{20,}$/,
+  INSTAGRAM_APP_ID: /^\d{6,20}$/,
+  INSTAGRAM_APP_SECRET: /^[0-9a-f]{20,64}$/i,
+  UPLOAD_POST_API_KEY: /^\S{16,}$/,
+  B2_KEY_ID: /^[0-9a-f]{12,40}$/i,
+  B2_APP_KEY: /^K[\w/+]{20,}$/,
+};
+
+/** Keys whose entered value doesn't look like that key. */
+export function invalidKeys(values: Partial<Record<IntegrationKey, string>>): IntegrationKey[] {
+  return INTEGRATION_KEYS.filter((k) => {
+    const v = values[k]?.trim();
+    return Boolean(v) && !KEY_FORMAT[k].test(v!);
+  });
+}
 const SETTING = "integrationKeys";
 const TTL_MS = 30_000;
 let loadedAt = 0;
