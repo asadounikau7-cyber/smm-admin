@@ -24,9 +24,8 @@ export async function resolveNotification(dedupKey: string) {
   await db.notification.updateMany({ where: { dedupKey, resolved: false }, data: { resolved: true } });
 }
 
-/** Kinds mailed at once; everything else waits for the hourly digest. */
+/** The only kinds that are mailed (at once); everything else is shown on «Обзор» only. */
 const URGENT = new Set(["outage", "auth", "removal", "sync", "worker"]);
-const DIGEST_MS = 60 * 60_000;
 
 export function recipients() {
   return env().NOTIFY_EMAILS?.split(",").map((s) => s.trim()).filter(Boolean) ?? [];
@@ -50,25 +49,18 @@ export async function sendMail(subject: string, text: string) {
   await m.t.sendMail({ from: m.from, to, subject, text });
 }
 
-/** Called by the worker: urgent problems go out at once, the rest as one digest an hour. */
+/** Called by the worker: serious problems go out by email at once. */
 export async function flushEmails(now = new Date()) {
-  const pending = await db.notification.findMany({ where: { resolved: false, sentAt: null }, orderBy: { createdAt: "asc" } });
+  // Only serious trouble is mailed (Andrei, 2026-11-25: no hourly digest); the rest stays on «Обзор».
+  const pending = await db.notification.findMany({ where: { resolved: false, sentAt: null, kind: { in: [...URGENT] } }, orderBy: { createdAt: "asc" } });
   if (!pending.length) return 0;
-  const urgent = pending.some((n) => URGENT.has(n.kind));
-  if (!urgent && now.getTime() - pending[0].createdAt.getTime() < DIGEST_MS) return 0;
   const m = await mailer();
   if (!m || !recipients().length) {
     for (const n of pending) console.log(`[notify] ${n.kind}: ${n.message}`);
   } else {
     const e = env();
-    const ordered = [...pending.filter((n) => URGENT.has(n.kind)), ...pending.filter((n) => !URGENT.has(n.kind))];
-    const lines = ordered.map((n) => `• ${n.message}${n.count > 1 ? ` (×${n.count})` : ""}${n.link ? `\n  ${e.APP_URL}${n.link}` : ""}`);
-    const head = ordered[0];
-    const subject = URGENT.has(head.kind)
-      ? `🔴 Админка: ${head.message.slice(0, 90)}`
-      : pending.length === 1
-        ? `Админка: ${head.message.slice(0, 90)}`
-        : `Админка: ${pending.length} событий требуют внимания`;
+    const lines = pending.map((n) => `• ${n.message}${n.count > 1 ? ` (×${n.count})` : ""}${n.link ? `\n  ${e.APP_URL}${n.link}` : ""}`);
+    const subject = pending.length === 1 ? `🔴 Админка: ${pending[0].message.slice(0, 90)}` : `🔴 Админка: ${pending.length} серьёзных проблемы`;
     await m.t.sendMail({ from: m.from, to: recipients(), subject, text: `${lines.join("\n\n")}\n\nОбзор: ${e.APP_URL}/` });
   }
   await db.notification.updateMany({ where: { id: { in: pending.map((n) => n.id) } }, data: { sentAt: now } });

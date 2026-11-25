@@ -31,12 +31,12 @@ describe("alerts", () => {
     expect(e.retryAfterSec).toBe(4 * 3600);
   });
 
-  it("a single failed job waits for the hourly digest, an outage goes out at once", async () => {
+  it("a single failed job is never mailed, an outage goes out at once", async () => {
     await db.notification.updateMany({ where: { resolved: false, sentAt: null }, data: { sentAt: new Date() } });
     const now = new Date();
     await notify("nt:job", "transient", "Ошибка публикации: timeout");
     expect(await flushEmails(now)).toBe(0);
-    expect(await flushEmails(new Date(now.getTime() + 61 * 60_000))).toBe(1);
+    expect(await flushEmails(new Date(now.getTime() + 61 * 60_000))).toBe(0);
     await notify("nt:outage", "outage", "Авария YOUTUBE: 3 задач подряд падают");
     expect(await flushEmails(now)).toBe(1);
     expect((await db.notification.findUniqueOrThrow({ where: { dedupKey: "nt:outage" } })).sentAt).not.toBeNull();
