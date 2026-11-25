@@ -10,12 +10,12 @@ const fmt = (d: Date, tz: string) => d.toLocaleString("ru-RU", { timeZone: tz, w
  * TikTok / Instagram posted by hand: what the operator has to put up today and tomorrow, account by account,
  * with the file, the caption and a mark for each post. Overdue packages come first.
  */
-export async function SocialPlan() {
+export async function SocialPlan({ platform, title }: { platform?: "TIKTOK" | "INSTAGRAM"; title?: string } = {}) {
   const now = new Date();
   const until = new Date(now.getTime() + 36 * 3600_000);
   const jobs = await db.publicationJob.findMany({
     where: {
-      platform: { in: ["TIKTOK", "INSTAGRAM"] },
+      platform: platform ? platform : { in: ["TIKTOK", "INSTAGRAM"] },
       OR: [
         { status: "ACTION_REQUIRED", errorCode: "MANUAL", scheduledAt: { lt: until } },
         { status: "MANUALLY_SCHEDULED", scheduledAt: { gte: new Date(now.getTime() - 24 * 3600_000) } },
@@ -41,7 +41,7 @@ export async function SocialPlan() {
   return (
     <section className="card mb-6 p-4">
       <div className="mb-1 flex flex-wrap items-center gap-3">
-        <h2 className="font-medium">TikTok / Instagram: план на сегодня и завтра</h2>
+        <h2 className="font-medium">{title ?? "TikTok / Instagram: план на сегодня и завтра"}</h2>
         <span className="text-xs muted">выложить: {todo.length}{overdue ? ` · просрочено: ${overdue}` : ""}</span>
       </div>
       <p className="mb-3 text-xs muted">

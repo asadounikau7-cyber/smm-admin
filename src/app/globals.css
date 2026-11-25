@@ -32,3 +32,9 @@ table.tbl { width:100%; border-collapse: collapse; font-size:.85rem; }
 table.tbl th { text-align:left; font-weight:500; color:var(--muted); padding:.5rem; border-bottom:1px solid var(--border); white-space:nowrap; }
 table.tbl td { padding:.5rem; border-bottom:1px solid var(--border); vertical-align: top; }
 .scroll-x { overflow-x:auto; }
+/* Number tables (statistics): roomy cells, centred figures, change under the figure. */
+table.tbl.num th, table.tbl.num td { padding:.65rem .9rem; vertical-align: middle; }
+table.tbl.num th.c, table.tbl.num td.c { text-align:center; }
+table.tbl.num tbody tr:hover { background: var(--bg); }
+table.tbl.num tr.total td { border-top:2px solid var(--border); font-weight:600; }
+table.tbl.num .delta { display:block; font-size:.72rem; line-height:1rem; }

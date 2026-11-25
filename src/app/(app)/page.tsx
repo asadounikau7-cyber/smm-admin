@@ -41,9 +41,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
 
   return (
     <div>
-      <PageHeader title="Обзор">
-        <Link href="/plan" className="btn btn-primary">Собрать неделю</Link>
-      </PageHeader>
+      <PageHeader title="Обзор" />
 
       <div className="mb-6 grid grid-cols-2 gap-3 md:grid-cols-4">
         <Stat label="В очереди" value={(c.QUEUED ?? 0) + (c.SENT ?? 0) + (c.PROCESSING ?? 0)} />

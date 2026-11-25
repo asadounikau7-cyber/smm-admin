@@ -27,23 +27,35 @@ export default async function StatsPage() {
           <ChannelStatsTable />
           <section>
             <h2 className="mb-2 font-medium">Просмотры по дням</h2>
-            <div className="card overflow-x-auto">
-              <table className="table text-sm">
-                <thead><tr><th>Канал</th>{days.map((d) => <th key={d} className="text-right">{DateTime.fromISO(d).setLocale("ru").toFormat("d LLL")}</th>)}</tr></thead>
+            <div className="card scroll-x">
+              <table className="tbl num">
+                <thead><tr><th>Канал</th>{days.map((d) => <th key={d} className="c">{DateTime.fromISO(d).setLocale("ru").toFormat("ccc, d LLL")}</th>)}<th className="c">За неделю</th></tr></thead>
                 <tbody>
                   {rows.filter((r) => r.a.role === "MAIN").map(({ a, list }) => (
                     <tr key={a.id}>
-                      <td>@{a.handle}</td>
-                      {days.map((d) => {
+                      <td className="whitespace-nowrap font-medium">@{a.handle}</td>
+                      {days.map((d, i) => {
                         const s = list.find((x) => x.day === d);
-                        return <td key={d} className="text-right">{s ? n(s.views) : <span className="muted">—</span>}</td>;
+                        const p = i > 0 ? list.find((x) => x.day === days[i - 1]) : list.find((x) => x.day < d && x.day >= DateTime.fromISO(d).minus({ days: 1 }).toISODate()!);
+                        const gain = s && p ? s.views - p.views : null;
+                        return (
+                          <td key={d} className="c">
+                            {s ? n(s.views) : <span className="muted">—</span>}
+                            {gain !== null && <span className={`delta ${gain > 0 ? "text-green-600" : "muted"}`}>{gain > 0 ? `+${n(gain)}` : "±0"}</span>}
+                          </td>
+                        );
                       })}
+                      {(() => {
+                        const inWeek = list.filter((x) => days.includes(x.day));
+                        const g = inWeek.length > 1 ? inWeek[inWeek.length - 1].views - inWeek[0].views : null;
+                        return <td className="c font-medium">{g === null ? "—" : g > 0 ? `+${n(g)}` : "0"}</td>;
+                      })()}
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
-            <p className="mt-1 text-xs muted">Всего просмотров канала на конец дня. Тестовые каналы не показаны: их ролики закрытые.</p>
+            <p className="mt-1 text-xs muted">Всего просмотров канала на конец дня, под числом — прирост за день. Тестовые каналы не показаны: их ролики закрытые.</p>
           </section>
         </>
       )}

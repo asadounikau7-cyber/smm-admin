@@ -29,6 +29,41 @@ export default async function FilmsPage({ searchParams }: { searchParams: Promis
   const waiting = await db.series.count({ where: { stage: "IN_WORK", bannedAt: null, mainSkip: { not: null }, compilation: null } });
   const on = s.filmAccountIds.length > 0;
 
+  // Plan: what is already scheduled, then the films on their way, then series waiting for a film.
+  // Each film channel takes one a day, so the rest get an estimated day in order.
+  const filmChannels = channels.filter((c) => s.filmAccountIds.includes(c.id));
+  const ORDER = ["PASSED", "TESTING", "READY", "BUILDING", "QUEUED"];
+  const pipeline = films.filter((f) => ORDER.includes(f.status)).sort((a, b) => ORDER.indexOf(a.status) - ORDER.indexOf(b.status) || a.createdAt.getTime() - b.createdAt.getTime());
+  const scheduled = films
+    .filter((f) => f.status === "SCHEDULED" && f.mainJobId && jobs.get(f.mainJobId))
+    .sort((a, b) => jobs.get(a.mainJobId!)!.scheduledAt.getTime() - jobs.get(b.mainJobId!)!.scheduledAt.getTime());
+  const waitingSeries = await db.series.findMany({
+    where: { stage: "IN_WORK", bannedAt: null, mainSkip: { not: null }, compilation: null },
+    orderBy: { inWorkAt: "asc" },
+    take: 30,
+    select: { id: true, title: true, mainSkip: true },
+  });
+  const tzBase = "America/Winnipeg";
+  const day0 = new Date();
+  const busyToday = new Set(scheduled.filter((f) => jobs.get(f.mainJobId!)!.scheduledAt.toDateString() === day0.toDateString()).map((f) => f.accountId));
+  const freeToday = Math.max(0, filmChannels.length - busyToday.size);
+  const estimate = (k: number) => {
+    if (!filmChannels.length) return "—";
+    const n = filmChannels.length;
+    const dayIdx = k < freeToday ? 0 : 1 + Math.floor((k - freeToday) / n);
+    return new Date(day0.getTime() + dayIdx * 86400_000).toLocaleDateString("ru-RU", { timeZone: tzBase, weekday: "short", day: "numeric", month: "short" });
+  };
+  const plan = [
+    ...scheduled.map((f) => {
+      const j = jobs.get(f.mainJobId!)!;
+      const ch = channels.find((c) => c.id === f.accountId);
+      return { key: f.id, title: f.series.title, seriesId: f.series.id, when: j.scheduledAt.toLocaleString("ru-RU", { timeZone: tzBase, weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }), exact: true, where: ch ? `@${ch.handle}` : "—", state: STATUS[f.status] };
+    }),
+    ...[...pipeline.map((f) => ({ id: f.id, title: f.series.title, seriesId: f.series.id, state: STATUS[f.status], where: channels.find((c) => c.id === f.accountId) })), ...waitingSeries.map((x) => ({ id: x.id, title: x.title, seriesId: x.id, state: "ждёт очереди на сборку", where: undefined }))].map(
+      (x, k) => ({ key: x.id, title: x.title, seriesId: x.seriesId, when: `≈ ${estimate(k)}`, exact: false, where: x.where ? `@${x.where.handle}` : filmChannels.length ? `@${filmChannels[k % filmChannels.length].handle}` : "—", state: x.state }),
+    ),
+  ];
+
   return (
     <div className="max-w-5xl space-y-6">
       <PageHeader title="Фильмы" />
@@ -61,7 +96,36 @@ export default async function FilmsPage({ searchParams }: { searchParams: Promis
       </form>
 
       <section>
-        <h2 className="mb-2 font-medium">Фильмы</h2>
+        <h2 className="mb-1 font-medium">План выхода</h2>
+        <p className="mb-2 text-xs muted">
+          {filmChannels.length
+            ? `Каналы фильмов: ${filmChannels.map((c) => "@" + c.handle).join(", ")} — по одному фильму в день на канал. Точное время — у запланированных; у остальных ориентировочный день по очереди.`
+            : "Каналы для фильмов не выбраны — план не строится."}
+        </p>
+        {plan.length === 0 ? (
+          <div className="card p-4 text-sm muted">Нечего планировать: нет сериалов с длинными сериями, прошедших тест.</div>
+        ) : (
+          <div className="card scroll-x">
+            <table className="tbl num">
+              <thead><tr><th className="c">#</th><th>Сериал</th><th className="c">Канал</th><th className="c">Выход</th><th>Сейчас</th></tr></thead>
+              <tbody>
+                {plan.map((p, i) => (
+                  <tr key={p.key}>
+                    <td className="c muted">{i + 1}</td>
+                    <td className="font-medium"><Link className="hover:underline" href={`/catalog?series=${p.seriesId}`}>{p.title}</Link></td>
+                    <td className="c">{p.where}</td>
+                    <td className={`c whitespace-nowrap ${p.exact ? "font-medium" : "muted"}`}>{p.when}</td>
+                    <td className="text-sm">{p.state}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      <section>
+        <h2 className="mb-2 font-medium">Все фильмы</h2>
         {films.length === 0 ? (
           <div className="card p-4 text-sm muted">Пока нет. Появятся, когда сериал с длинными сериями пройдёт тест первой серии.</div>
         ) : (

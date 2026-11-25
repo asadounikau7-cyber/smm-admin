@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { db } from "@/lib/db";
 import { catalogConfigured } from "@/lib/env";
-import { Empty, Flash, PageHeader, fmtDur, fmtSize } from "@/components/ui";
+import { Empty, Flash, PageHeader, Tabs, fmtDur, fmtSize } from "@/components/ui";
 import { getYtTestSettings } from "@/lib/seriesTest";
 import { SeriesTestCard } from "@/components/seriesTest";
 import { ManualUploads } from "@/components/manualUploads";
@@ -9,11 +9,24 @@ import { setSeriesBanAction, syncNowAction, toggleSeriesActiveAction, updateAsse
 
 const KIND_LABEL: Record<string, string> = { FULL_EPISODE: "Полная серия", VERTICAL: "Вертикальная", TEASER: "Анонс", COVER: "Обложка", SUBTITLES: "Субтитры" };
 
-type SP = Promise<{ q?: string; series?: string; ok?: string; err?: string; unmapped?: string }>;
+type SP = Promise<{ q?: string; series?: string; ok?: string; err?: string; unmapped?: string; tab?: string }>;
+
+const STAGE_TAB: Record<string, "IN_WORK" | "TESTING" | "TEST_FAILED"> = { work: "IN_WORK", testing: "TESTING", failed: "TEST_FAILED" };
 
 export default async function CatalogPage({ searchParams }: { searchParams: SP }) {
   const sp = await searchParams;
   const q = sp.q?.trim();
+  const tab = sp.tab && STAGE_TAB[sp.tab] ? sp.tab : "all";
+  const stageCounts = Object.fromEntries((await db.series.groupBy({ by: ["stage"], _count: true })).map((x) => [x.stage, x._count])) as Record<string, number>;
+  const bannedCount = await db.series.count({ where: { bannedAt: { not: null } } });
+  const tabSeries =
+    tab === "all"
+      ? []
+      : await db.series.findMany({
+          where: { stage: STAGE_TAB[tab], ...(q ? { title: { contains: q, mode: "insensitive" as const } } : {}) },
+          orderBy: tab === "work" ? [{ inWorkAt: { sort: "desc", nulls: "last" } }] : [{ testCheckedAt: { sort: "desc", nulls: "last" } }, { title: "asc" }],
+          take: 500,
+        });
   const series = await db.series.findMany({
     where: q ? { OR: [{ title: { contains: q, mode: "insensitive" } }, { slug: { contains: q } }] } : undefined,
     orderBy: [{ active: "desc" }, { title: "asc" }],
@@ -48,6 +61,51 @@ export default async function CatalogPage({ searchParams }: { searchParams: SP }
       <Flash msg={sp.ok} />
       <Flash msg={sp.err} kind="err" />
       {!catalogConfigured() && <Flash kind="err" msg="Источник каталога не настроен: укажите B2_REGISTRY_URL (публичный каталог) или ключ B2 в .env." />}
+      <Tabs
+        active={tab}
+        items={[
+          { key: "all", label: "Все сериалы", href: "/catalog", count: total },
+          { key: "work", label: "В работе", href: "/catalog?tab=work", count: stageCounts.IN_WORK ?? 0 },
+          { key: "testing", label: "На тесте", href: "/catalog?tab=testing", count: stageCounts.TESTING ?? 0 },
+          { key: "failed", label: "Не прошли", href: "/catalog?tab=failed", count: stageCounts.TEST_FAILED ?? 0 },
+        ]}
+      />
+      {tab !== "all" && (
+        <section>
+          <form className="mb-2 max-w-sm"><input type="hidden" name="tab" value={tab} /><input name="q" defaultValue={q} placeholder="Поиск по названию" className="input" /></form>
+          {tabSeries.length === 0 ? (
+            <Empty>Здесь пока пусто.</Empty>
+          ) : (
+            <div className="card scroll-x">
+              <table className="tbl">
+                <thead>
+                  <tr>
+                    <th className="w-10 text-center">#</th>
+                    <th>Сериал</th>
+                    <th className="whitespace-nowrap">{tab === "work" ? "В работе с" : "Проверен"}</th>
+                    <th>{tab === "failed" ? "Почему не прошёл" : tab === "work" ? "Заметка" : "Состояние теста"}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {tabSeries.map((x, i) => (
+                    <tr key={x.id}>
+                      <td className="text-center muted">{i + 1}</td>
+                      <td className="font-medium"><Link className="hover:underline" href={`/catalog?series=${x.id}`}>{x.title}</Link>{x.bannedAt && <span className="ml-2 text-xs text-red-600">INACTIVE</span>}</td>
+                      <td className="whitespace-nowrap muted">{(() => {
+                        const d = tab === "work" ? x.inWorkAt : (x.testCheckedAt ?? x.testLiveAt);
+                        return d ? d.toLocaleString("ru-RU", { timeZone: "America/Winnipeg", dateStyle: "short", timeStyle: "short" }) : "—";
+                      })()}</td>
+                      <td className="text-sm">{x.mainSkip ? `Не на боевых: ${x.mainSkip}` : x.testNote ?? "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {tab === "failed" && bannedCount > 0 && <p className="mt-2 text-xs muted">Ещё {bannedCount} сериалов помечены INACTIVE (забанены вручную) — они видны во вкладке «Все сериалы» красным.</p>}
+        </section>
+      )}
+      {tab === "all" && (<>
 
       {unmapped.length > 0 && (
         <section className="mb-6">
@@ -244,6 +302,7 @@ export default async function CatalogPage({ searchParams }: { searchParams: SP }
           )}
         </section>
       </div>
+      </>)}
     </div>
   );
 }

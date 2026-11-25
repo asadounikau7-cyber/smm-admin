@@ -4,9 +4,10 @@ import { usePathname } from "next/navigation";
 
 const ITEMS = [
   { href: "/", label: "Обзор" },
-  { href: "/plan", label: "Неделя" },
   { href: "/publications", label: "Публикации" },
   { href: "/youtube", label: "YouTube-конвейер" },
+  { href: "/tiktok", label: "TikTok-конвейер" },
+  { href: "/instagram", label: "Instagram-конвейер" },
   { href: "/stats", label: "Статистика" },
   { href: "/hooks", label: "Завязки" },
   { href: "/films", label: "Фильмы" },

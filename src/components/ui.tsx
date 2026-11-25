@@ -82,3 +82,21 @@ export function fmtDur(sec: number | null | undefined) {
   const s = Math.round(sec % 60);
   return `${m}:${String(s).padStart(2, "0")}`;
 }
+
+/** Page tabs as links: the active one is the one whose key matches. */
+export function Tabs({ items, active }: { items: { key: string; label: string; href: string; count?: number }[]; active: string }) {
+  return (
+    <div className="mb-4 flex flex-wrap gap-1 border-b" style={{ borderColor: "var(--border)" }}>
+      {items.map((t) => (
+        <a
+          key={t.key}
+          href={t.href}
+          className={`-mb-px whitespace-nowrap border-b-2 px-3 py-2 text-sm ${t.key === active ? "border-current font-medium" : "muted border-transparent hover:opacity-80"}`}
+        >
+          {t.label}
+          {t.count !== undefined && <span className="ml-1.5 text-xs muted">{t.count}</span>}
+        </a>
+      ))}
+    </div>
+  );
+}

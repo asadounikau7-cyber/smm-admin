@@ -127,13 +127,18 @@ export async function addTikTokAccountAction(f: FormData) {
   if (mode === "PARTNER" && !profile) redirect("/accounts?err=" + encodeURIComponent("Укажите имя профиля Upload-Post, где подключён этот аккаунт"));
   const externalId = mode === "PARTNER" ? profile : handle;
   const geo = ["US", "UK"].includes(s(f, "geo")) ? s(f, "geo") : null;
+  const octoProfileId = s(f, "octoProfileId") || null;
   const a = await db.socialAccount.upsert({
     where: { platform_externalId: { platform, externalId } },
-    update: { handle, language: s(f, "language") || null, tiktokMode: mode, status: "ACTIVE", geo, role: "MAIN" },
-    create: { platform, externalId, handle, language: s(f, "language") || null, tiktokMode: mode, geo, role: "MAIN" },
+    update: { handle, language: s(f, "language") || null, tiktokMode: mode, status: "ACTIVE", geo, role: "MAIN", ...(octoProfileId ? { octoProfileId } : {}) },
+    create: { platform, externalId, handle, language: s(f, "language") || "en", tiktokMode: mode, geo, role: "MAIN", octoProfileId },
   });
   await audit("account.add", "SocialAccount", a.id, u.id, { platform, handle, mode, geo });
   revalidatePath("/accounts");
+  revalidatePath("/tiktok");
+  revalidatePath("/instagram");
+  const back = s(f, "back");
+  if (back === "/tiktok" || back === "/instagram") redirect(`${back}?ok=` + encodeURIComponent(`@${handle} добавлен: сериалы появятся в плане в течение пары минут`));
 }
 
 export async function updateAccountAction(f: FormData) {

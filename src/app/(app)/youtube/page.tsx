@@ -182,17 +182,7 @@ export default async function YouTubeConveyorPage() {
         )}
       </section>
 
-      <section>
-        <h2 className="mb-2 font-medium">TikTok и Instagram</h2>
-        {social.length === 0 ? (
-          <Empty>Нет аккаунтов TikTok или Instagram с гео. Добавьте их на странице «Аккаунты»: они получат сериалы, прошедшие тест на YouTube.</Empty>
-        ) : (
-          <>
-            <p className="mb-2 text-xs muted">Слоты {s.socialSlots.join(", ") || "не заданы"}, первые {s.mainEpisodes} серии; каждый сериал на один аккаунт площадки. TikTok «вручную» получает пакет для TikTok Studio.</p>
-            <div className="grid gap-3 md:grid-cols-2">{social.map((m) => queueCard(m, false))}</div>
-          </>
-        )}
-      </section>
+      <p className="text-xs muted">TikTok и Instagram — на своих вкладках: <Link className="underline" href="/tiktok">TikTok-конвейер</Link>, <Link className="underline" href="/instagram">Instagram-конвейер</Link>.</p>
     </div>
   );
 }
