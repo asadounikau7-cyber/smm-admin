@@ -3,7 +3,7 @@ import { decryptJson, encryptJson } from "./crypto";
 import { setEnvOverrides, type Env } from "./env";
 
 /** Keys the owner can enter in «Настройки» instead of editing .env on the server. */
-export const INTEGRATION_KEYS = ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "INSTAGRAM_APP_ID", "INSTAGRAM_APP_SECRET", "UPLOAD_POST_API_KEY", "B2_KEY_ID", "B2_APP_KEY"] as const;
+export const INTEGRATION_KEYS = ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "INSTAGRAM_APP_ID", "INSTAGRAM_APP_SECRET", "UPLOAD_POST_API_KEY", "B2_KEY_ID", "B2_APP_KEY", "GMAIL_APP_PASSWORD"] as const;
 export type IntegrationKey = (typeof INTEGRATION_KEYS)[number];
 
 /**
@@ -18,6 +18,7 @@ const KEY_FORMAT: Record<IntegrationKey, RegExp> = {
   UPLOAD_POST_API_KEY: /^\S{16,}$/,
   B2_KEY_ID: /^[0-9a-f]{12,40}$/i,
   B2_APP_KEY: /^K[\w/+]{20,}$/,
+  GMAIL_APP_PASSWORD: /^([a-z]{4} ?){3}[a-z]{4}$/i,
 };
 
 /** Keys whose entered value doesn't look like that key. */

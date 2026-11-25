@@ -3,7 +3,7 @@ import { db } from "./db";
 import { adapterFor } from "./adapters";
 import { AdapterError, type Outcome } from "./adapters/types";
 import { validate } from "./validators";
-import { notify, resolveNotification } from "./notify";
+import { checkOutage, notify, resolveNotification } from "./notify";
 import { audit } from "./audit";
 
 const LEASE_MS = 10 * 60_000;
@@ -97,9 +97,11 @@ async function applyError(job: PublicationJob, err: AdapterError) {
   const attempts = job.attemptCount + 1;
   const base = { leaseUntil: null, attemptCount: attempts, errorCode: err.kind, errorMessage: err.message.slice(0, 1000) };
   const link = `/publications?job=${job.id}`;
+  const outage = () => (err.kind === "MODERATION" ? null : checkOutage(job.platform, err.message).catch((e) => console.warn(`[outage] ${(e as Error).message}`)));
 
   if ((err.kind === "TRANSIENT" || err.kind === "RATE_LIMIT") && attempts < MAX_ATTEMPTS) {
     await db.publicationJob.update({ where: { id: job.id }, data: { ...base, nextAttemptAt: new Date(Date.now() + backoffSec(attempts, err.retryAfterSec) * 1000) } });
+    await outage();
     return;
   }
   if (err.kind === "AUTH") {
@@ -115,6 +117,7 @@ async function applyError(job: PublicationJob, err: AdapterError) {
   }
   const status = err.kind === "UNKNOWN_RESULT" ? "UNKNOWN" : err.kind === "MODERATION" ? "ACTION_REQUIRED" : "FAILED";
   await db.publicationJob.update({ where: { id: job.id }, data: { ...base, status } });
+  await outage();
   if (err.kind === "MODERATION" && job.platform === "YOUTUBE" && /не найден/i.test(err.message)) {
     const { stopSeriesAfterRemoval } = await import("./seriesTest");
     await stopSeriesAfterRemoval(job.id, err.message).catch((e) => console.warn(`[removal] ${job.id}: ${(e as Error).message}`));

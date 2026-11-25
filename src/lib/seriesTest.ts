@@ -467,6 +467,6 @@ export async function stopSeriesAfterRemoval(jobId: string, reason: string, now 
   const note = `YouTube удалил серию ${ep?.number ?? "?"} на @${job.account.handle} (${reason}). Проверьте почту канала: скорее всего нарушение правил сообщества. Сериал снят со всех каналов`;
   await db.series.update({ where: { id: series.id }, data: { stage: "TEST_FAILED", testNote: note } });
   await audit("main.series.removed", "PublicationJob", job.id, null, { note, cancelled: pending.map((j) => j.id) });
-  await notify(`series-removed:${series.id}`, "series-test", `«${series.title}»: ${note}`, `/publications/${job.id}`);
+  await notify(`series-removed:${series.id}`, "removal", `«${series.title}»: ${note}`, `/publications/${job.id}`);
   return { note, cancelled: pending.length };
 }

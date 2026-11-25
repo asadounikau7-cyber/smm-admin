@@ -443,6 +443,18 @@ export async function saveIntegrationKeysAction(f: FormData) {
     if (err) redirect("/settings?err=" + encodeURIComponent(`Ключи сохранены, но ${err}`));
     redirect("/settings?ok=" + encodeURIComponent("Ключ Backblaze принят: файлы из закрытого бакета снова скачиваются"));
   }
+  // A Gmail app password is tried with a real test letter.
+  if (values.GMAIL_APP_PASSWORD) {
+    const { sendMail } = await import("@/lib/notify");
+    let err: string | null = null;
+    try {
+      await sendMail("Админка: проверка писем об авариях", "Это проверочное письмо. Если админка заметит сбой (ключ, токен, B2, сервер), письмо придёт сюда сразу.");
+    } catch (e) {
+      err = (e as Error).message;
+    }
+    if (err) redirect("/settings?err=" + encodeURIComponent(`Пароль сохранён, но письмо не ушло: ${err.slice(0, 200)}`));
+    redirect("/settings?ok=" + encodeURIComponent("Почта работает: проверочное письмо отправлено"));
+  }
   redirect("/settings?ok=" + encodeURIComponent("Ключи сохранены. Подключать аккаунты можно сразу"));
 }
 

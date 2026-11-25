@@ -28,6 +28,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
     { k: "UPLOAD_POST_API_KEY", label: "Upload-Post API key", group: "TikTok" },
     { k: "B2_KEY_ID", label: "Backblaze keyID (ключ только на чтение)", group: "B2" },
     { k: "B2_APP_KEY", label: "Backblaze applicationKey", group: "B2" },
+    { k: "GMAIL_APP_PASSWORD", label: "Пароль приложения Gmail (16 букв) для писем об авариях", group: "Почта" },
   ] as const;
   const hint = (v?: string) => (v ? `…${v.slice(-4)}` : "");
   const check = (ok: boolean) => (ok ? <span className="text-green-600">настроено</span> : <span className="muted">не настроено</span>);
@@ -177,7 +178,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
           <li>YouTube (Google OAuth): {check(Boolean(e.GOOGLE_CLIENT_ID && e.GOOGLE_CLIENT_SECRET))}</li>
           <li>Instagram (Instagram Login): {check(Boolean(e.INSTAGRAM_APP_ID && e.INSTAGRAM_APP_SECRET))}</li>
           <li>TikTok через Upload-Post: {check(Boolean(e.UPLOAD_POST_API_KEY))}</li>
-          <li>Email-уведомления: {check(Boolean(e.SMTP_URL && e.NOTIFY_EMAILS))} {e.NOTIFY_EMAILS && <span className="muted">→ {e.NOTIFY_EMAILS}</span>}</li>
+          <li>Email-уведомления: {check(Boolean((e.SMTP_URL || e.GMAIL_APP_PASSWORD) && e.NOTIFY_EMAILS))} {e.NOTIFY_EMAILS && <span className="muted">→ {e.NOTIFY_EMAILS}</span>}</li>
         </ul>
       </div>
 

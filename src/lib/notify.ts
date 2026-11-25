@@ -1,6 +1,7 @@
 import nodemailer from "nodemailer";
 import { db } from "./db";
 import { env } from "./env";
+import { loadIntegrationKeys } from "./integrationKeys";
 
 /**
  * Records a problem that needs the owner. The same dedupKey is merged (count++),
@@ -23,24 +24,80 @@ export async function resolveNotification(dedupKey: string) {
   await db.notification.updateMany({ where: { dedupKey, resolved: false }, data: { resolved: true } });
 }
 
-/** Called by the worker: sends unsent notifications as one digest email. */
-export async function flushEmails() {
+/** Kinds mailed at once; everything else waits for the hourly digest. */
+const URGENT = new Set(["outage", "auth", "removal", "sync", "worker"]);
+const DIGEST_MS = 60 * 60_000;
+
+export function recipients() {
+  return env().NOTIFY_EMAILS?.split(",").map((s) => s.trim()).filter(Boolean) ?? [];
+}
+
+/** SMTP from .env, or Gmail with an app password entered in Settings (mail goes from the first recipient's Gmail). */
+export async function mailer() {
+  await loadIntegrationKeys();
   const e = env();
+  if (e.SMTP_URL) return { t: nodemailer.createTransport(e.SMTP_URL), from: e.MAIL_FROM ?? "SMM Admin <noreply@localhost>" };
+  const user = recipients().find((a) => /@(gmail|googlemail)\.com$/i.test(a));
+  if (e.GMAIL_APP_PASSWORD && user)
+    return { t: nodemailer.createTransport({ service: "gmail", auth: { user, pass: e.GMAIL_APP_PASSWORD.replace(/\s+/g, "") } }), from: `SMM Admin <${user}>` };
+  return null;
+}
+
+export async function sendMail(subject: string, text: string) {
+  const m = await mailer();
+  const to = recipients();
+  if (!m || !to.length) throw new Error("почта не настроена: нужен пароль приложения Gmail в Настройках");
+  await m.t.sendMail({ from: m.from, to, subject, text });
+}
+
+/** Called by the worker: urgent problems go out at once, the rest as one digest an hour. */
+export async function flushEmails(now = new Date()) {
   const pending = await db.notification.findMany({ where: { resolved: false, sentAt: null }, orderBy: { createdAt: "asc" } });
   if (!pending.length) return 0;
-  const to = e.NOTIFY_EMAILS?.split(",").map((s) => s.trim()).filter(Boolean) ?? [];
-  if (!e.SMTP_URL || !to.length) {
+  const urgent = pending.some((n) => URGENT.has(n.kind));
+  if (!urgent && now.getTime() - pending[0].createdAt.getTime() < DIGEST_MS) return 0;
+  const m = await mailer();
+  if (!m || !recipients().length) {
     for (const n of pending) console.log(`[notify] ${n.kind}: ${n.message}`);
   } else {
-    const t = nodemailer.createTransport(e.SMTP_URL);
-    const lines = pending.map((n) => `• ${n.message}${n.count > 1 ? ` (×${n.count})` : ""}\n  ${n.link ? e.APP_URL + n.link : ""}`);
-    await t.sendMail({
-      from: e.MAIL_FROM ?? "SMM Admin <noreply@localhost>",
-      to,
-      subject: pending.length === 1 ? `Нужно внимание: ${pending[0].message.slice(0, 80)}` : `Нужно внимание: ${pending.length} событий`,
-      text: lines.join("\n\n"),
-    });
+    const e = env();
+    const ordered = [...pending.filter((n) => URGENT.has(n.kind)), ...pending.filter((n) => !URGENT.has(n.kind))];
+    const lines = ordered.map((n) => `• ${n.message}${n.count > 1 ? ` (×${n.count})` : ""}${n.link ? `\n  ${e.APP_URL}${n.link}` : ""}`);
+    const head = ordered[0];
+    const subject = URGENT.has(head.kind)
+      ? `🔴 Админка: ${head.message.slice(0, 90)}`
+      : pending.length === 1
+        ? `Админка: ${head.message.slice(0, 90)}`
+        : `Админка: ${pending.length} событий требуют внимания`;
+    await m.t.sendMail({ from: m.from, to: recipients(), subject, text: `${lines.join("\n\n")}\n\nОбзор: ${e.APP_URL}/` });
   }
-  await db.notification.updateMany({ where: { id: { in: pending.map((n) => n.id) } }, data: { sentAt: new Date() } });
+  await db.notification.updateMany({ where: { id: { in: pending.map((n) => n.id) } }, data: { sentAt: now } });
   return pending.length;
+}
+
+/** An error message with ids, numbers and quotes taken out, so the same failure on different jobs matches. */
+export function errorSignature(message: string) {
+  return message.replace(/«[^»]*»|"[^"]*"/g, (q) => (/error|invalid|denied|unauthor/i.test(q) ? q : "…")).replace(/\d+/g, "#").slice(0, 120);
+}
+
+/**
+ * The same error on several different jobs within half an hour is not bad luck but a broken key, token,
+ * bucket or server: one urgent email right away instead of a pile of failed jobs found the next day.
+ */
+export async function checkOutage(platform: string, message: string, now = new Date()) {
+  const sig = errorSignature(message);
+  const recent = await db.publicationJob.findMany({
+    where: { platform: platform as never, errorMessage: { not: null }, updatedAt: { gte: new Date(now.getTime() - 30 * 60_000) } },
+    select: { errorMessage: true },
+    take: 200,
+  });
+  const same = recent.filter((j) => errorSignature(j.errorMessage!) === sig).length;
+  if (same < 3) return false;
+  await notify(
+    `outage:${platform}`,
+    "outage",
+    `Авария ${platform}: ${same} задач подряд падают с одной ошибкой — «${message.slice(0, 160)}». Публикации стоят, нужно чинить`,
+    "/",
+  );
+  return true;
 }

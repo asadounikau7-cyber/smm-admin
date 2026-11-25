@@ -167,12 +167,19 @@ async function main() {
   await markSpanishSeries().then((n) => n && console.log(`[lang] marked ${n} Spanish series`)).catch((e) => console.error("[lang]", e));
   process.on("SIGTERM", () => (stopping = true));
   process.on("SIGINT", () => (stopping = true));
+  let failedTicks = 0;
   while (!stopping) {
     const started = Date.now();
     try {
       await tick();
+      failedTicks = 0;
     } catch (e) {
       console.error("[worker] tick failed", e);
+      // Several ticks in a row: the worker is stuck, nothing gets published.
+      if (++failedTicks === 5)
+        await notify("worker", "worker", `Фоновый процесс админки падает: ${(e as Error).message.slice(0, 200)}`, "/")
+          .then(() => flushEmails())
+          .catch(() => undefined);
     }
     await new Promise((r) => setTimeout(r, Math.max(1000, TICK_MS - (Date.now() - started))));
   }

@@ -28,6 +28,8 @@ const schema = z.object({
   AGENT_TOKEN: z.string().optional(),
 
   SMTP_URL: z.string().optional(),
+  /// Gmail app password (myaccount.google.com/apppasswords): mail goes from the first NOTIFY_EMAILS address via Gmail
+  GMAIL_APP_PASSWORD: z.string().optional(),
   MAIL_FROM: z.string().optional(),
   NOTIFY_EMAILS: z.string().optional(),
 
