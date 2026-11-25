@@ -401,6 +401,7 @@ export async function manualStatusAction(f: FormData) {
     `job.manual.${target.toLowerCase()}`,
   );
   revalidatePath("/publications");
+  revalidatePath("/");
 }
 
 export async function resolveNotificationAction(f: FormData) {

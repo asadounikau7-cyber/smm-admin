@@ -5,6 +5,7 @@ import { recoverFailedAction, resolveNotificationAction } from "@/app/actions";
 import { recoverableWhere } from "@/lib/recover";
 import { studioEditUrl } from "@/lib/adapters/youtube";
 import { ChannelStatsTable, StatsLink } from "@/components/channelStats";
+import { SocialPlan } from "@/components/socialPlan";
 
 export default async function Dashboard({ searchParams }: { searchParams: Promise<{ ok?: string }> }) {
   const sp = await searchParams;
@@ -56,13 +57,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
         <ChannelStatsTable mainOnly />
       </section>
 
-      {manual > 0 && (
-        <Link href="/publications?status=ACTION_REQUIRED" className="card mb-4 flex items-center gap-3 p-4 text-sm hover:opacity-80">
-          <span className="rounded-full bg-teal-100 px-2 py-0.5 text-xs text-teal-800 dark:bg-teal-950 dark:text-teal-300">TikTok / Instagram вручную</span>
-          <span className="flex-1">Поставить вручную по пакетам: {manual} публикаций</span>
-          <span className="underline">Открыть пакеты</span>
-        </Link>
-      )}
+      <SocialPlan />
 
       {studio.length > 0 && (
         <section className="card mb-4 p-4">
