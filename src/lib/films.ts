@@ -2,7 +2,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { mkdir, rename, rm, stat, statfs, writeFile } from "node:fs/promises";
 import { DateTime } from "luxon";
-import type { Compilation, Episode, Series, SocialAccount } from "@prisma/client";
+import type { Compilation, Episode, Prisma, Series, SocialAccount } from "@prisma/client";
 import { db } from "./db";
 import { probe, run } from "./media";
 import { mediaUrl } from "./mediaSource";
@@ -10,14 +10,15 @@ import { sourceFor } from "./variants";
 import { getOrCreatePlan } from "./planner";
 import { toLocal, weekStartFor } from "./time";
 import { RENDERS_DIR, renderPath } from "./renderStore";
-import { ytVideoHealth } from "./adapters/youtube";
+import { ytLongUploads, ytVideoHealth } from "./adapters/youtube";
 import { GEOS, getConveyorSettings, isGeo } from "./conveyor";
 import { notify } from "./notify";
 import { audit } from "./audit";
 
 /**
  * Films: a whole series as one long vertical video (episodes back to back, chapters in the description).
- * For series whose episodes don't fit Shorts. Built on the server without re-encoding, tested privately
+ * Any series that passed its test gets one (long-episode series first, they have no Shorts). Built on the
+ * server without re-encoding (up to 15 minutes while no film channel is phone-verified), tested privately
  * on a test channel (Content ID checks every minute of it), then published as a regular video on the
  * film channels, one a day each.
  */
@@ -29,6 +30,8 @@ const FILM_PIPELINE_PER_CHANNEL = 2;
 /** Films planned ahead per channel. */
 const FILM_DAYS_AHEAD = 2;
 const BUILD_TIMEOUT_MS = 3 * 3600_000;
+/** YouTube rejects longer uploads from channels that are not phone-verified; a little margin under 15:00. */
+export const UNVERIFIED_MAX_SEC = 15 * 60 - 15;
 
 export type Chapter = { season: number; number: number; at: number };
 
@@ -42,15 +45,16 @@ export const clock = (sec: number) => {
 };
 
 /** Title, description (with chapters YouTube turns into a timeline) and tags of a film. */
-export function filmMeta(series: Pick<Series, "title" | "synopsis"> & { hookTitle?: string | null }, chapters: Chapter[]) {
+export function filmMeta(series: Pick<Series, "title" | "synopsis"> & { hookTitle?: string | null }, chapters: Chapter[], total = chapters.length) {
   const name = clean(series.title);
   const head = series.hookTitle ? clean(series.hookTitle) : name;
-  const suffix = " | Full Series";
+  const partial = chapters.length < total;
+  const suffix = partial ? ` | Parts 1-${chapters.length}` : " | Full Series";
   const title = head.length + suffix.length <= 100 ? `${head}${suffix}` : `${head.slice(0, 100 - suffix.length - 1).trimEnd()}…${suffix}`;
   const multiSeason = new Set(chapters.map((c) => c.season)).size > 1;
   const lines = chapters.map((c) => `${clock(c.at)} ${multiSeason ? `Season ${c.season} ` : ""}Part ${c.number}`);
   const description = [
-    `${name}: the full series, all ${chapters.length} parts in one video.`,
+    partial ? `${name}: parts 1-${chapters.length} of ${total} in one video.` : `${name}: the full series, all ${chapters.length} parts in one video.`,
     series.synopsis ? clean(series.synopsis) : null,
     "",
     ...lines,
@@ -75,7 +79,14 @@ export async function filmAccounts() {
   return { s, test: test?.status === "ACTIVE" ? test : null, mains };
 }
 
-/** Series that need a film: in work, kept off Shorts channels because an episode is too long. */
+export const filmCandidates: Prisma.SeriesWhereInput = {
+  stage: "IN_WORK",
+  bannedAt: null,
+  compilation: null,
+  OR: [{ contentLang: null }, { contentLang: "en" }],
+};
+
+/** Series that get a film: every one that passed its test, English, long-episode ones (no Shorts for them) first. */
 export async function queueFilms() {
   const { mains } = await filmAccounts();
   if (!mains.length) return 0;
@@ -83,8 +94,8 @@ export async function queueFilms() {
   const active = await db.compilation.count({ where: { status: { in: ["QUEUED", "BUILDING", "READY", "TESTING", "PASSED"] } } });
   if (active >= max) return 0;
   const next = await db.series.findMany({
-    where: { stage: "IN_WORK", bannedAt: null, mainSkip: { not: null }, compilation: null },
-    orderBy: { inWorkAt: "asc" },
+    where: filmCandidates,
+    orderBy: [{ mainSkip: { sort: "asc", nulls: "last" } }, { inWorkAt: { sort: "asc", nulls: "last" } }],
     take: max - active,
     select: { id: true },
   });
@@ -110,7 +121,7 @@ async function source(ep: Episode, language: string) {
 class FilmError extends Error {}
 
 /** Concatenates every episode into one file without re-encoding; all episodes must share one format. */
-export async function buildFilm(id: string, language = "en") {
+export async function buildFilm(id: string, language = "en", maxSec?: number) {
   const comp = await db.compilation.findUniqueOrThrow({
     where: { id },
     include: { series: { include: { episodes: { orderBy: [{ season: "asc" }, { number: "asc" }] } } } },
@@ -118,13 +129,19 @@ export async function buildFilm(id: string, language = "en") {
   const eps = comp.series.episodes;
   if (eps.length < 3) throw new FilmError(`Мало серий для фильма: ${eps.length}`);
   const files: { ep: Episode; asset: NonNullable<Awaited<ReturnType<typeof source>>>["asset"]; version: NonNullable<Awaited<ReturnType<typeof source>>>["version"] }[] = [];
+  let length = 0;
   for (const ep of eps) {
     const f = await source(ep, language);
     if (!f) throw new FilmError(`Нет файла серии ${ep.number}`);
     if (f.version.probeError || !f.version.durationSec) throw new FilmError(`Серия ${ep.number} не читается`);
     if (!f.version.audioCodec) throw new FilmError(`В серии ${ep.number} нет звука`);
+    // Not phone-verified: the first parts that fit in 15 minutes.
+    if (maxSec && length + f.version.durationSec > maxSec) break;
+    length += f.version.durationSec;
     files.push({ ep, ...f });
   }
+  if (files.length < 3)
+    throw new FilmError(`Первые 3 серии длиннее 15 минут: такой фильм YouTube примет только с канала, подтверждённого по телефону (youtube.com/verify). После подтверждения нажмите «Собрать заново»`);
   const sig = (v: (typeof files)[number]["version"]) => `${v.videoCodec}|${v.width}x${v.height}|${v.audioCodec}`;
   const odd = files.find((f) => sig(f.version) !== sig(files[0].version));
   if (odd) throw new FilmError(`Серии в разном формате (серия ${odd.ep.number}: ${sig(odd.version)}, серия 1: ${sig(files[0].version)}); без перекодирования не склеить`);
@@ -184,12 +201,19 @@ export async function buildFilm(id: string, language = "en") {
   });
   await db.compilation.update({
     where: { id },
-    data: { status: "READY", assetVersionId: version.id, durationSec: p.durationSec, episodes: files.length, chapters, note: `Собран: ${files.length} серий, ${clock(p.durationSec)}` },
+    data: { status: "READY", assetVersionId: version.id, durationSec: p.durationSec, episodes: files.length, chapters, note: `Собран: ${files.length < eps.length ? `серии 1–${files.length} из ${eps.length}` : `${files.length} серий`}, ${clock(p.durationSec)}` },
   });
   await audit("film.built", "Compilation", id, null, { series: comp.series.title, episodes: files.length, durationSec: p.durationSec, size });
 }
 
 let building: Promise<void> | null = null;
+
+/** True when every film channel is phone-verified (YouTube takes uploads over 15 minutes). Unknown counts as no. */
+export async function longUploadsAllowed(mains: SocialAccount[]) {
+  if (!mains.length) return false;
+  const all = await Promise.all(mains.map((m) => ytLongUploads(m).catch(() => "unknown")));
+  return all.every((x) => x === "allowed");
+}
 
 /** Starts building the next queued film in the background (one at a time); a build cut off by a restart starts over. */
 export async function maybeBuildFilm() {
@@ -200,7 +224,8 @@ export async function maybeBuildFilm() {
   if (!next) return null;
   const { mains } = await filmAccounts();
   await db.compilation.update({ where: { id: next.id }, data: { status: "BUILDING", note: "Собирается" } });
-  building = buildFilm(next.id, (mains[0]?.language || "en").toLowerCase())
+  const maxSec = (await longUploadsAllowed(mains)) ? undefined : UNVERIFIED_MAX_SEC;
+  building = buildFilm(next.id, (mains[0]?.language || "en").toLowerCase(), maxSec)
     .catch(async (e) => {
       const msg = (e as Error).message.slice(0, 500);
       console.error(`[films] build ${next.series.title}: ${msg}`);
@@ -211,8 +236,8 @@ export async function maybeBuildFilm() {
   return next.series.title;
 }
 
-function filmJobData(comp: Compilation & { series: Series }, account: SocialAccount, visibility: "PRIVATE" | "PUBLIC", scheduledAt: Date, tz: string) {
-  const { title, description, tags } = filmMeta(comp.series, (comp.chapters ?? []) as Chapter[]);
+function filmJobData(comp: Compilation & { series: Series }, account: SocialAccount, visibility: "PRIVATE" | "PUBLIC", scheduledAt: Date, tz: string, total?: number) {
+  const { title, description, tags } = filmMeta(comp.series, (comp.chapters ?? []) as Chapter[], total);
   return {
     accountId: account.id,
     assetVersionId: comp.assetVersionId!,
@@ -226,6 +251,7 @@ function filmJobData(comp: Compilation & { series: Series }, account: SocialAcco
     deadlineAt: new Date(scheduledAt.getTime() + 12 * 3600_000),
     caption: description,
     title,
+    tags,
   };
 }
 
@@ -233,8 +259,8 @@ async function createJob(comp: Compilation & { series: Series }, account: Social
   const tz = isGeo(account.geo) ? GEOS[account.geo].tz : "America/New_York";
   const plan = await getOrCreatePlan(weekStartFor(at, tz));
   const instanceKey = `${purpose}:${comp.id}:${Date.now()}`;
-  const data = filmJobData(comp, account, visibility, at, tz);
-  const { tags } = filmMeta(comp.series, (comp.chapters ?? []) as Chapter[]);
+  const total = await db.episode.count({ where: { seriesId: comp.seriesId } });
+  const { tags, ...data } = filmJobData(comp, account, visibility, at, tz, total);
   return db.publicationJob.create({
     data: {
       ...data,

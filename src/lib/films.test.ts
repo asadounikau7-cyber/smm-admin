@@ -56,6 +56,12 @@ afterAll(async () => {
 });
 
 describe("films", () => {
+  it("without phone verification takes only the parts that fit, and refuses when fewer than 3 fit", async () => {
+    const comp = await db.compilation.create({ data: { seriesId } });
+    await expect(buildFilm(comp.id, "en", 6)).rejects.toThrow(/15 минут/);
+    await db.compilation.delete({ where: { id: comp.id } });
+  }, 60_000);
+
   it("glues every episode into one file and remembers where each part starts", async () => {
     const comp = await db.compilation.create({ data: { seriesId } });
     await buildFilm(comp.id);
@@ -134,5 +140,12 @@ describe("films", () => {
     expect(m.title).toBe("She married a stranger | Full Series");
     expect(m.description).toContain("0:00 Part 1\n3:42 Part 2\n1:02:05 Part 3");
     expect(clock(59.9)).toBe("0:59");
+    const part = filmMeta({ title: "Film Test", synopsis: null, hookTitle: null }, [
+      { season: 1, number: 1, at: 0 },
+      { season: 1, number: 2, at: 90 },
+      { season: 1, number: 3, at: 180 },
+    ], 60);
+    expect(part.title).toBe("Film Test | Parts 1-3");
+    expect(part.description).toContain("parts 1-3 of 60");
   });
 });

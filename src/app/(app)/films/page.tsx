@@ -2,7 +2,7 @@ import Link from "next/link";
 import { db } from "@/lib/db";
 import { PageHeader } from "@/components/ui";
 import { getConveyorSettings } from "@/lib/conveyor";
-import { clock } from "@/lib/films";
+import { clock, filmCandidates, longUploadsAllowed } from "@/lib/films";
 import { retryFilmAction, saveFilmSettingsAction } from "@/app/testActions";
 
 export const dynamic = "force-dynamic";
@@ -26,8 +26,9 @@ export default async function FilmsPage({ searchParams }: { searchParams: Promis
   const films = await db.compilation.findMany({ orderBy: { updatedAt: "desc" }, take: 100, include: { series: { select: { id: true, title: true, hookTitle: true } } } });
   const jobIds = films.flatMap((f) => [f.testJobId, f.mainJobId]).filter(Boolean) as string[];
   const jobs = new Map((await db.publicationJob.findMany({ where: { id: { in: jobIds } }, select: { id: true, externalUrl: true, scheduledAt: true, status: true } })).map((j) => [j.id, j]));
-  const waiting = await db.series.count({ where: { stage: "IN_WORK", bannedAt: null, mainSkip: { not: null }, compilation: null } });
+  const waiting = await db.series.count({ where: filmCandidates });
   const on = s.filmAccountIds.length > 0;
+  const longOk = await longUploadsAllowed(channels.filter((c) => s.filmAccountIds.includes(c.id)));
 
   // Plan: what is already scheduled, then the films on their way, then series waiting for a film.
   // Each film channel takes one a day, so the rest get an estimated day in order.
@@ -38,8 +39,8 @@ export default async function FilmsPage({ searchParams }: { searchParams: Promis
     .filter((f) => f.status === "SCHEDULED" && f.mainJobId && jobs.get(f.mainJobId))
     .sort((a, b) => jobs.get(a.mainJobId!)!.scheduledAt.getTime() - jobs.get(b.mainJobId!)!.scheduledAt.getTime());
   const waitingSeries = await db.series.findMany({
-    where: { stage: "IN_WORK", bannedAt: null, mainSkip: { not: null }, compilation: null },
-    orderBy: { inWorkAt: "asc" },
+    where: filmCandidates,
+    orderBy: [{ mainSkip: { sort: "asc", nulls: "last" } }, { inWorkAt: { sort: "asc", nulls: "last" } }],
     take: 30,
     select: { id: true, title: true, mainSkip: true },
   });
@@ -70,9 +71,11 @@ export default async function FilmsPage({ searchParams }: { searchParams: Promis
       {sp.ok && <div className="card p-3 text-sm">{sp.ok}</div>}
       {sp.err && <div className="card border-red-400 p-3 text-sm text-red-600">{sp.err}</div>}
       <p className="text-xs muted">
-        Сериалы, у которых серии длиннее 3 минут (в Shorts не попадают), собираются в один ролик из всех серий с главами в описании,
-        проходят закрытый тест на Content ID и выходят обычным видео, один фильм в день на канал. Ролики длиннее 15 минут YouTube
-        принимает только на каналах, подтверждённых по телефону. Ждут сборки: {waiting}.
+        Каждый сериал, прошедший тест, собирается в один ролик из серий подряд с главами в описании (сначала сериалы с длинными
+        сериями, им в Shorts нельзя), проходит закрытый тест на Content ID и выходит обычным видео, один фильм в день на канал.
+        Ролики длиннее 15 минут YouTube принимает только с каналов, подтверждённых по телефону:{" "}
+        {longOk ? "каналы фильмов подтверждены, фильм собирается из всех серий." : "пока канал не подтверждён, в фильм идут первые серии, которые влезают в 15 минут."}{" "}
+        Ждут сборки: {waiting}.
       </p>
 
       <form action={saveFilmSettingsAction} className="card space-y-3 p-4 text-sm">
@@ -103,7 +106,7 @@ export default async function FilmsPage({ searchParams }: { searchParams: Promis
             : "Каналы для фильмов не выбраны — план не строится."}
         </p>
         {plan.length === 0 ? (
-          <div className="card p-4 text-sm muted">Нечего планировать: нет сериалов с длинными сериями, прошедших тест.</div>
+          <div className="card p-4 text-sm muted">Нечего планировать: нет сериалов, прошедших тест, без фильма.</div>
         ) : (
           <div className="card scroll-x">
             <table className="tbl num">
@@ -127,7 +130,7 @@ export default async function FilmsPage({ searchParams }: { searchParams: Promis
       <section>
         <h2 className="mb-2 font-medium">Все фильмы</h2>
         {films.length === 0 ? (
-          <div className="card p-4 text-sm muted">Пока нет. Появятся, когда сериал с длинными сериями пройдёт тест первой серии.</div>
+          <div className="card p-4 text-sm muted">Пока нет. Появятся, когда сериалы пройдут тест.</div>
         ) : (
           <div className="card scroll-x">
             <table className="tbl">

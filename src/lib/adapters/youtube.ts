@@ -516,6 +516,12 @@ export async function deleteTestUploads(accountId: string, userId: string | null
 }
 
 /** Public numbers of one channel right now: channel totals plus likes/comments over its public videos. */
+/** Whether the channel may upload videos longer than 15 minutes (phone-verified): "allowed", "eligible" or "disallowed". */
+export async function ytLongUploads(account: SocialAccount): Promise<string> {
+  const { body } = await api(account, "channels?part=status&mine=true");
+  return String(body.items?.[0]?.status?.longUploadsStatus ?? "unknown");
+}
+
 export async function ytChannelSnapshot(account: SocialAccount) {
   const { body: ch } = await api(account, "channels?part=statistics,contentDetails&mine=true");
   const c = ch.items?.[0];
