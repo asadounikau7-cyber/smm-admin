@@ -4,7 +4,7 @@ import { PageHeader, PlatformTag, StatusBadge, Empty } from "@/components/ui";
 import { recoverFailedAction, resolveNotificationAction } from "@/app/actions";
 import { recoverableWhere } from "@/lib/recover";
 import { studioEditUrl } from "@/lib/adapters/youtube";
-import { ChannelStatsTable, StatsLink } from "@/components/channelStats";
+import { OverviewStats } from "@/components/overviewStats";
 import { SocialPlan } from "@/components/socialPlan";
 
 export default async function Dashboard({ searchParams }: { searchParams: Promise<{ ok?: string }> }) {
@@ -50,10 +50,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
         <Stat label="Синхронизация каталога" value={sync?.at ? new Date(sync.at).toLocaleString("ru-RU", { timeZone: "America/Winnipeg", dateStyle: "short", timeStyle: "short" }) : "не было"} />
       </div>
 
-      <section className="mb-6">
-        <div className="mb-2 flex items-center justify-between"><h2 className="font-medium">Боевые каналы YouTube</h2><StatsLink /></div>
-        <ChannelStatsTable mainOnly />
-      </section>
+      <OverviewStats />
 
       <SocialPlan />
 
