@@ -113,7 +113,7 @@ export async function renderOnServer(id: string) {
   try {
     const v = await loadVariant(id);
     const plan = buildRender(v.recipe, { durationSec: v.sourceVersion.durationSec, hasAudio: Boolean(v.sourceVersion.audioCodec) }, "veryfast");
-    const input = await mediaUrl(v.sourceAsset, v.sourceVersion, 6 * 3600, { internal: true });
+    const input = await mediaUrl(v.sourceAsset, v.sourceVersion, 6 * 3600, { internal: true, download: true });
     await withWorkdir(plan.files, async (dir) => {
       await ffmpegIn(dir, plan.args, input, 40 * 60_000);
       await storeRender(id, path.join(dir, plan.output), "server");
@@ -127,7 +127,7 @@ export async function renderOnServer(id: string) {
 export async function renderFrame(versionId: string, recipe: unknown, outT: number): Promise<Buffer> {
   const v = await db.assetVersion.findUniqueOrThrow({ where: { id: versionId }, include: { asset: true } });
   const plan = buildFrame(normalizeRecipe(recipe), outT, v.durationSec);
-  const input = await mediaUrl(v.asset, v, 600, { internal: true });
+  const input = await mediaUrl(v.asset, v, 600, { internal: true, download: true });
   return withWorkdir(plan.files, async (dir) => {
     await ffmpegIn(dir, plan.args, input, 60_000);
     return readFile(path.join(dir, plan.output));

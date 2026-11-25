@@ -140,7 +140,7 @@ export async function buildFilm(id: string, language = "en") {
   for (const f of files) {
     chapters.push({ season: f.ep.season, number: f.ep.number, at });
     at += f.version.durationSec!;
-    const url = await mediaUrl(f.asset, f.version, 6 * 3600, { internal: true });
+    const url = await mediaUrl(f.asset, f.version, 6 * 3600, { internal: true, download: true });
     list.push(`file '${url.replace(/'/g, "'\\''")}'`);
   }
   const base = `film-${comp.series.slug}-${comp.id.slice(-6)}`;
