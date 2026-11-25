@@ -1,5 +1,6 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { db } from "./db";
+import { classifyHttp } from "./adapters/types";
 import { errorSignature, flushEmails, notify } from "./notify";
 
 const KEYS = ["nt:job", "nt:outage"];
@@ -14,6 +15,12 @@ describe("alerts", () => {
     expect(a).toBe(errorSignature('Google token: {"error":"invalid_client","error_description":"Client missing a project id."}'));
     expect(errorSignature("B2 401 for «639552-S01E02.mp4» after 3 tries")).toBe(errorSignature("B2 401 for «639527-S01E05.mp4» after 4 tries"));
     expect(errorSignature("quota exceeded")).not.toBe(errorSignature("uploadLimitExceeded"));
+  });
+
+  it("YouTube's daily upload cap is waited out, not a failure", () => {
+    const e = classifyHttp(new Response(null, { status: 400 }), { error: { code: 400, message: "The user has exceeded the number of videos they may upload.", errors: [{ reason: "uploadLimitExceeded" }] } });
+    expect(e.kind).toBe("RATE_LIMIT");
+    expect(e.retryAfterSec).toBe(4 * 3600);
   });
 
   it("a single failed job waits for the hourly digest, an outage goes out at once", async () => {

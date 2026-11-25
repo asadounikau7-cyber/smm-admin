@@ -97,7 +97,7 @@ async function applyError(job: PublicationJob, err: AdapterError) {
   const attempts = job.attemptCount + 1;
   const base = { leaseUntil: null, attemptCount: attempts, errorCode: err.kind, errorMessage: err.message.slice(0, 1000) };
   const link = `/publications?job=${job.id}`;
-  const outage = () => (err.kind === "MODERATION" ? null : checkOutage(job.platform, err.message).catch((e) => console.warn(`[outage] ${(e as Error).message}`)));
+  const outage = () => (err.kind === "MODERATION" || err.kind === "RATE_LIMIT" ? null : checkOutage(job.platform, err.message).catch((e) => console.warn(`[outage] ${(e as Error).message}`)));
 
   if ((err.kind === "TRANSIENT" || err.kind === "RATE_LIMIT") && attempts < MAX_ATTEMPTS) {
     await db.publicationJob.update({ where: { id: job.id }, data: { ...base, nextAttemptAt: new Date(Date.now() + backoffSec(attempts, err.retryAfterSec) * 1000) } });

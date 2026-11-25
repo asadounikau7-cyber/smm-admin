@@ -67,6 +67,8 @@ export function classifyHttp(res: Response, body: unknown): AdapterError {
   const msg = typeof body === "object" && body ? JSON.stringify(body).slice(0, 400) : String(body).slice(0, 400);
   const ra = Number(res.headers.get("retry-after")) || undefined;
   if (res.status === 429) return new AdapterError("RATE_LIMIT", `429: ${msg}`, 429, ra ?? 60);
+  // YouTube's per-channel daily upload cap: wait it out instead of failing the job.
+  if (res.status === 400 && /uploadLimitExceeded|exceeded the number of videos/i.test(msg)) return new AdapterError("RATE_LIMIT", `Дневной лимит загрузок канала: ${msg}`, 400, 4 * 3600);
   if (res.status === 401) return new AdapterError("AUTH", `401: ${msg}`, 401);
   if (res.status === 403 && /quota/i.test(msg)) return new AdapterError("RATE_LIMIT", `Квота: ${msg}`, 403, 3600);
   if (res.status === 403) return new AdapterError("AUTH", `403: ${msg}`, 403);

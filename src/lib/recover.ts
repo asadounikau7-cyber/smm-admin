@@ -14,6 +14,8 @@ export const recoverableWhere: Prisma.PublicationJobWhereInput = {
   OR: [
     { status: "FAILED", errorCode: { in: OUR_SIDE } },
     { status: "ACTION_REQUIRED", errorCode: "AUTH" },
+    // YouTube's daily upload cap (counted as INVALID before 2026-11-25).
+    { status: "FAILED", errorMessage: { contains: "exceeded the number of videos" } },
   ],
 };
 
