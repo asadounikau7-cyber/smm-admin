@@ -36,7 +36,7 @@ beforeAll(async () => {
   seriesId = s.id;
   for (const n of [1, 2, 3]) {
     const file = path.join(dir, `ep${n}.mp4`);
-    const r = await run("ffmpeg", ["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=180x320:rate=25", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100",
+    const r = await run("ffmpeg", ["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", `testsrc=size=${n === 3 ? "270x480" : "180x320"}:rate=25`, "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100",
       "-t", String(n + 1), "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", file]);
     expect(r.code).toBe(0);
     const ep = await db.episode.create({ data: { seriesId, season: 1, number: n } });
@@ -62,12 +62,14 @@ describe("films", () => {
     await db.compilation.delete({ where: { id: comp.id } });
   }, 60_000);
 
-  it("glues every episode into one file and remembers where each part starts", async () => {
+  it("glues every episode into one file (re-encoding when formats differ) and remembers where each part starts", async () => {
     const comp = await db.compilation.create({ data: { seriesId } });
     await buildFilm(comp.id);
     const done = await db.compilation.findUniqueOrThrow({ where: { id: comp.id } });
     expect(done.status).toBe("READY");
     expect(done.episodes).toBe(3);
+    const out = await db.assetVersion.findUniqueOrThrow({ where: { id: done.assetVersionId! } });
+    expect([out.width, out.height, out.videoCodec]).toEqual([1080, 1920, "h264"]);
     expect(done.durationSec).toBeGreaterThan(8.5);
     expect(done.durationSec).toBeLessThan(9.5);
     const ch = done.chapters as { number: number; at: number }[];

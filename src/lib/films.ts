@@ -120,6 +120,17 @@ async function source(ep: Episode, language: string) {
 
 class FilmError extends Error {}
 
+/** One episode re-encoded to the common film format: 1080x1920 (letterboxed if needed), 30 fps, H.264 + AAC. */
+export function normalizeArgs(input: string, output: string) {
+  return [
+    "-hide_banner", "-loglevel", "error", "-y", "-protocol_whitelist", "file,http,https,tcp,tls,crypto", "-i", input,
+    "-map", "0:v:0", "-map", "0:a:0",
+    "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30",
+    "-c:v", "libx264", "-preset", "veryfast", "-crf", "21", "-pix_fmt", "yuv420p", "-threads", "2",
+    "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2", "-movflags", "+faststart", output,
+  ];
+}
+
 /** Concatenates every episode into one file without re-encoding; all episodes must share one format. */
 export async function buildFilm(id: string, language = "en", maxSec?: number) {
   const comp = await db.compilation.findUniqueOrThrow({
@@ -143,28 +154,38 @@ export async function buildFilm(id: string, language = "en", maxSec?: number) {
   if (files.length < 3)
     throw new FilmError(`Первые 3 серии длиннее 15 минут: такой фильм YouTube примет только с канала, подтверждённого по телефону (youtube.com/verify). После подтверждения нажмите «Собрать заново»`);
   const sig = (v: (typeof files)[number]["version"]) => `${v.videoCodec}|${v.width}x${v.height}|${v.audioCodec}`;
-  const odd = files.find((f) => sig(f.version) !== sig(files[0].version));
-  if (odd) throw new FilmError(`Серии в разном формате (серия ${odd.ep.number}: ${sig(odd.version)}, серия 1: ${sig(files[0].version)}); без перекодирования не склеить`);
+  // Episodes in different formats can't be glued as they are: then every part is re-encoded to one format first.
+  const mixed = files.some((f) => sig(f.version) !== sig(files[0].version));
 
   const bytes = files.reduce((n, f) => n + Number(f.version.size), 0);
   await mkdir(RENDERS_DIR, { recursive: true });
   const fs = await statfs(RENDERS_DIR);
-  if (fs.bavail * fs.bsize < bytes * 1.5 + 2 * 1024 ** 3) throw new Error(`Мало места на сервере для фильма (${(bytes / 1024 ** 3).toFixed(1)} ГБ)`);
+  if (fs.bavail * fs.bsize < bytes * (mixed ? 3 : 1.5) + 2 * 1024 ** 3) throw new Error(`Мало места на сервере для фильма (${(bytes / 1024 ** 3).toFixed(1)} ГБ)`);
 
+  const base = `film-${comp.series.slug}-${comp.id.slice(-6)}`;
+  const parts: string[] = [];
   let at = 0;
   const chapters: Chapter[] = [];
   const list: string[] = [];
-  for (const f of files) {
-    chapters.push({ season: f.ep.season, number: f.ep.number, at });
-    at += f.version.durationSec!;
-    const url = await mediaUrl(f.asset, f.version, 6 * 3600, { internal: true, download: true });
-    list.push(`file '${url.replace(/'/g, "'\\''")}'`);
-  }
-  const base = `film-${comp.series.slug}-${comp.id.slice(-6)}`;
   const listFile = renderPath(`${base}.txt`);
   const tmp = renderPath(`${base}.part.mp4`);
-  await writeFile(listFile, list.join("\n") + "\n", "utf8");
   try {
+    for (const [i, f] of files.entries()) {
+      chapters.push({ season: f.ep.season, number: f.ep.number, at });
+      const url = await mediaUrl(f.asset, f.version, 6 * 3600, { internal: true, download: true });
+      if (!mixed) {
+        at += f.version.durationSec!;
+        list.push(`file '${url.replace(/'/g, "'\\''")}'`);
+        continue;
+      }
+      const part = renderPath(`${base}-p${i + 1}.mp4`);
+      parts.push(part);
+      const r = await run("nice", ["-n", "15", "ffmpeg", ...normalizeArgs(url, part)], 40 * 60_000);
+      if (r.code !== 0) throw new Error(`ffmpeg, серия ${f.ep.number}: ${r.stderr.trim().split("\n").slice(-2).join(" ").slice(0, 300)}`);
+      at += (await probe(part)).durationSec ?? f.version.durationSec!;
+      list.push(`file '${part.replace(/'/g, "'\\''")}'`);
+    }
+    await writeFile(listFile, list.join("\n") + "\n", "utf8");
     const r = await run(
       "ffmpeg",
       ["-hide_banner", "-loglevel", "error", "-y", "-protocol_whitelist", "file,http,https,tcp,tls,crypto", "-f", "concat", "-safe", "0", "-i", listFile,
@@ -177,6 +198,7 @@ export async function buildFilm(id: string, language = "en", maxSec?: number) {
     throw e;
   } finally {
     await rm(listFile, { force: true });
+    for (const p of parts) await rm(p, { force: true });
   }
   const p = await probe(tmp);
   if (!p.durationSec || Math.abs(p.durationSec - at) > Math.max(5, at * 0.02)) {
