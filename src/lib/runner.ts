@@ -87,6 +87,7 @@ async function applyOutcome(job: PublicationJob, out: Outcome) {
       errorMessage: out.note ?? null,
     },
   });
+  await resolveNotification(`outage:${job.platform}`); // a step went through: the outage is over
   if (status === "PUBLISHED") {
     await resolveNotification(`job:${job.id}`);
     await audit("job.published", "PublicationJob", job.id, null, { url: out.externalUrl ?? null });

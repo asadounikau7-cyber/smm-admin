@@ -56,6 +56,7 @@ export async function syncNowAction() {
   let msg: string;
   try {
     const r = await syncCatalog();
+    await db.notification.updateMany({ where: { dedupKey: "sync", resolved: false }, data: { resolved: true } });
     await probePending(20);
     msg = `Найдено ${r.seen}, новых ${r.created}, новых версий ${r.newVersions}, удалено ${r.deleted}, требуют разметки ${r.needsMapping}`;
   } catch (e) {

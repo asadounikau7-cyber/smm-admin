@@ -6,7 +6,7 @@ import { igRefresh } from "@/lib/adapters/instagram";
 import { collectChannelStats, postNextPartComments, refreshYoutubeMeta, syncSeriesPlaylists } from "@/lib/adapters/youtube";
 import { claim, runCancel, runJob } from "@/lib/runner";
 import { runFilms } from "@/lib/films";
-import { flushEmails, notify } from "@/lib/notify";
+import { flushEmails, notify, resolveNotification } from "@/lib/notify";
 import { loadIntegrationKeys } from "@/lib/integrationKeys";
 import { checkSeriesTests, guardMainUploads, recheckPassedSeries } from "@/lib/seriesTest";
 import { scheduleMain, scheduleSocial, scheduleTests } from "@/lib/conveyor";
@@ -33,6 +33,7 @@ async function maybeSync() {
   try {
     const r = await syncCatalog();
     console.log(`[sync] ${JSON.stringify(r)}`);
+    await resolveNotification("sync");
     await markSpanishSeries();
     await probePending(50);
   } catch (e) {
