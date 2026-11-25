@@ -1,4 +1,4 @@
-import { b2Fetch, ensureB2Keys } from "./b2auth";
+import { b2Fetch, b2Reason, ensureB2Keys } from "./b2auth";
 import { db } from "./db";
 import { parseObjectKey } from "./pathParse";
 
@@ -24,7 +24,7 @@ export function extractRegistry(body: string): Registry {
 export async function fetchRegistry(url: string): Promise<Registry> {
   await ensureB2Keys();
   const res = await b2Fetch(url, { signal: AbortSignal.timeout(120_000) });
-  if (!res.ok) throw new Error(`Каталог: HTTP ${res.status}${res.status === 401 ? " (бакет B2 закрыт: нужен ключ B2 в Настройках → «Ключи площадок»)" : ""}`);
+  if (!res.ok) throw new Error(`Каталог: HTTP ${res.status} ${await b2Reason(res)}`.trim());
   return extractRegistry(await res.text());
 }
 

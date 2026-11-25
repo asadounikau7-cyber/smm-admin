@@ -54,6 +54,27 @@ async function bucketName(a: Auth, fileId: string): Promise<string | null> {
   return name;
 }
 
+/** Why B2 refused, in words: a 403 is usually a daily cap of the account (Caps & Alerts in Backblaze). */
+export async function b2Reason(res: Response) {
+  if (res.ok) return "";
+  let code = "";
+  let message = "";
+  try {
+    const body = JSON.parse(await res.text()) as { code?: string; message?: string };
+    code = body.code ?? "";
+    message = body.message ?? "";
+  } catch {
+    /* not JSON */
+  }
+  const hint =
+    res.status === 401
+      ? "бакет B2 закрыт: нужен ключ B2 в Настройках → «Ключи площадок»"
+      : /cap_exceeded/.test(code)
+        ? "исчерпан дневной лимит аккаунта Backblaze: поднимите его в Backblaze → Caps & Alerts"
+        : "";
+  return [code, message.slice(0, 150), hint].filter(Boolean).join(" · ");
+}
+
 /** fetch() for a B2 download link: adds the token when a key is set and renews it once on a 401. */
 export async function b2Fetch(url: string, init: RequestInit = {}): Promise<Response> {
   if (!isB2Download(url) || !b2KeySet()) return fetch(url, init);

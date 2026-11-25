@@ -5,7 +5,7 @@ import type { Asset, AssetVersion } from "@prisma/client";
 import { b2Configured } from "./env";
 import { openRange, openStream, presign } from "./b2";
 import { isLocalKey, renderPath, renderPublicUrl } from "./renderStore";
-import { b2Fetch, b2KeySet, b2SignedUrl, ensureB2Keys, isB2Download } from "./b2auth";
+import { b2Fetch, b2KeySet, b2Reason, b2SignedUrl, ensureB2Keys, isB2Download } from "./b2auth";
 
 /**
  * One place that knows where video bytes come from: a private bucket via S3 key (signed URLs),
@@ -40,7 +40,7 @@ export async function mediaStream(asset: A, version: V, offset = 0): Promise<{ s
   if (!asset.publicUrl) throw new Error("Нет публичной ссылки на файл");
   const res = await b2Fetch(asset.publicUrl, { headers: offset ? { range: `bytes=${offset}-` } : {} });
   if (!res.ok || !res.body)
-    throw new Error(`Скачивание файла: HTTP ${res.status}${res.status === 401 ? " (бакет B2 закрыт: нужен ключ B2 в Настройках → «Ключи площадок»)" : ""}`);
+    throw new Error(`Скачивание файла: HTTP ${res.status} ${await b2Reason(res)}`.trim());
   return { stream: Readable.fromWeb(res.body as never), size: Number(res.headers.get("content-length") ?? 0) };
 }
 
