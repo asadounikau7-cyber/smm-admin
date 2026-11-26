@@ -7,7 +7,7 @@ import { DateTime } from "luxon";
 import { db } from "./db";
 import { encryptJson } from "./crypto";
 import { importRegistry, type Registry } from "./registry";
-import { DEFAULT_CONVEYOR, dropLongMain, dropMainDuplicates, enqueueMain, prepareChannelVersions, rebalanceMain, releaseTestsOnMainChannels, saveConveyorSettings, scheduleMain, scheduleSocial, scheduleTests, testTimes } from "./conveyor";
+import { DEFAULT_CONVEYOR, dropLongMain, dropMainDuplicates, enqueueMain, prepareChannelVersions, rebalanceMain, releaseStaleTestSlots, releaseTestsOnMainChannels, saveConveyorSettings, scheduleMain, scheduleSocial, scheduleTests, testTimes } from "./conveyor";
 import { recoverFailedJobs } from "./recover";
 import { checkSeriesTests, guardMainUploads, markTestPassed, saveYtTestSettings, startSeriesTest, stopSeriesAfterRemoval } from "./seriesTest";
 
@@ -439,6 +439,49 @@ describe("YouTube conveyor", () => {
     expect(back.scheduledAt.getTime()).toBeLessThanOrEqual(firstSlot);
     expect(await recoverFailedJobs(now)).toMatchObject({ reconcile: 0, mainLine: 0, retests: 0, retried: 0 });
     await db.series.delete({ where: { id: series.id } });
+  });
+
+  it("after the test slots change, planned tests on a dropped slot go back to the queue; uploaded or kept ones stay", async () => {
+    await db.socialAccount.update({ where: { id: ids.cv_t_us1 }, data: { role: "TEST" } });
+    const tpl = await db.publicationJob.findFirstOrThrow({ where: { accountId: ids.cv_t_us1 } });
+    const { id: _id, createdAt: _c, updatedAt: _u, meta: _m, blockReasons: _b, ...base } = tpl;
+    const day = local(now).plus({ days: 1 }).toISODate();
+    const mk = async (slug: string, slot: string, uploaded = false) => {
+      await db.series.deleteMany({ where: { slug } });
+      const series = await db.series.create({ data: { slug, title: slug, stage: "TESTING" } });
+      const run = `${series.id}:run`;
+      const jobs = [];
+      for (const n of [0, 1, 2])
+        jobs.push(
+          await db.publicationJob.create({
+            data: {
+              ...base,
+              status: "QUEUED",
+              externalId: uploaded && n === 0 ? "vid_up" : null,
+              instanceKey: `test:${run}:${n}`,
+              idempotencyKey: `${run}:${n}`,
+              scheduledAt: new Date(now.getTime() + 86400_000 + n * 120_000),
+              meta: { purpose: "test", testRun: run, seriesId: series.id, ...(n ? {} : { conveyorSlot: `${day}|${slot}` }) },
+            },
+          }),
+        );
+      await db.series.update({ where: { id: series.id }, data: { testJobId: jobs[0].id } });
+      return { series, jobs };
+    };
+    const stale = await mk("conv-stale", "10:15");
+    const kept = await mk("conv-kept", "11:00");
+    const half = await mk("conv-half", "13:45", true);
+    const released = await releaseStaleTestSlots({ ...DEFAULT_CONVEYOR, testSlots: ["11:00", "15:00"] }, now);
+    expect(released).toBe(1);
+    const status = async (x: { jobs: { id: string }[] }) => (await db.publicationJob.findMany({ where: { id: { in: x.jobs.map((j) => j.id) } } })).map((j) => j.status);
+    expect(await status(stale)).toEqual(["CANCELLED", "CANCELLED", "CANCELLED"]);
+    expect(await db.series.findUniqueOrThrow({ where: { id: stale.series.id } })).toMatchObject({ stage: "NEW", testJobId: null, testQueuedAt: stale.jobs[0].createdAt });
+    expect(await status(kept)).toEqual(["QUEUED", "QUEUED", "QUEUED"]);
+    expect(await status(half)).toEqual(["QUEUED", "QUEUED", "QUEUED"]);
+    for (const x of [stale, kept, half]) {
+      await db.publicationJob.deleteMany({ where: { id: { in: x.jobs.map((j) => j.id) } } });
+      await db.series.delete({ where: { id: x.series.id } });
+    }
   });
 
   it("jitter never puts a test before 09:00", () => {

@@ -179,6 +179,34 @@ async function nextSeries(s: ConveyorSettings) {
 /** YouTube searches per pick (100 quota units each, of 10,000 a day). */
 const COMPETITION_CHECKS = 4;
 
+/**
+ * Test slots changed in settings: planned tests on a slot that no longer exists (nothing of the run
+ * uploaded yet) are called off, and their series go back to the front of the test queue, so the new
+ * slots take them. Without this, the days already planned keep the old number of tests.
+ */
+export async function releaseStaleTestSlots(s: ConveyorSettings, now = new Date()) {
+  const slots = new Set(s.testSlots);
+  const jobs = await db.publicationJob.findMany({
+    where: { status: "QUEUED", externalId: null, scheduledAt: { gt: new Date(now.getTime() + 10 * 60_000) }, account: { platform: "YOUTUBE", role: "TEST" } },
+    select: { id: true, meta: true, createdAt: true },
+  });
+  let released = 0;
+  for (const j of jobs) {
+    const meta = (j.meta ?? {}) as { conveyorSlot?: unknown; testRun?: string; seriesId?: string };
+    if (typeof meta.conveyorSlot !== "string" || slots.has(meta.conveyorSlot.split("|")[1])) continue;
+    const run = meta.testRun ? await db.publicationJob.findMany({ where: { meta: { path: ["testRun"], equals: meta.testRun } }, select: { id: true, status: true, externalId: true } }) : [];
+    if (run.some((r) => r.externalId || !["QUEUED", "CANCELLED"].includes(r.status))) continue;
+    await db.publicationJob.updateMany({ where: { id: { in: [j.id, ...run.map((r) => r.id)] }, status: "QUEUED" }, data: { status: "CANCELLED" } });
+    if (meta.seriesId)
+      await db.series.updateMany({
+        where: { id: meta.seriesId, stage: "TESTING", testJobId: j.id },
+        data: { stage: "NEW", testJobId: null, testNote: null, testQueuedAt: j.createdAt },
+      });
+    released++;
+  }
+  return released;
+}
+
 /** Worker: fills today's free test slots on every test channel. Idempotent per slot. */
 /**
  * A test channel switched to main: its planned tests that haven't started uploading are called off,
@@ -205,6 +233,7 @@ export async function scheduleTests(now = new Date()) {
   const s = await getConveyorSettings();
   if (!s.enabled) return [];
   await releaseTestsOnMainChannels();
+  await releaseStaleTestSlots(s, now);
   const created: { account: string; series: string; at: Date }[] = [];
   for (const geo of Object.keys(GEOS) as Geo[]) {
     const tests = await channels("TEST", geo);
