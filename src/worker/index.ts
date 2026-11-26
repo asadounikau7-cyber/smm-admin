@@ -12,6 +12,7 @@ import { checkSeriesTests, guardMainUploads, recheckPassedSeries } from "@/lib/s
 import { scheduleMain, scheduleSocial, scheduleTests } from "@/lib/conveyor";
 import { markSpanishSeries } from "@/lib/language";
 import { agentRenderOnline, claimRender, getRenderMode, renderOnServer } from "@/lib/renderJobs";
+import { restartTest } from "@/lib/recover";
 
 const TICK_MS = 15_000;
 let lastSync = 0;
@@ -70,6 +71,12 @@ async function dispatchDue() {
     if (j.scheduledAt.getTime() - adapter.leadMinutes(j) * 60_000 > now) continue;
     // Missed slot: past the catch-up window and nothing was sent yet → ask the owner, never publish on our own.
     if (now > j.deadlineAt.getTime() && !j.externalId) {
+      const meta = (j.meta ?? {}) as { purpose?: string; seriesId?: string };
+      // A test that missed its slot (e.g. the channel's daily upload cap) simply goes back to the test queue.
+      if (meta.purpose === "test" && meta.seriesId) {
+        await restartTest(meta.seriesId, j.scheduledAt, `Тест не ушёл вовремя (${(j.errorMessage ?? "слот пропущен").slice(0, 120)}), перезапущен`);
+        continue;
+      }
       await db.publicationJob.update({ where: { id: j.id }, data: { status: "ACTION_REQUIRED", errorCode: "OVERDUE", errorMessage: "Слот пропущен, перенесите публикацию" } });
       await notify(`job:${j.id}`, "overdue", `Пропущен слот публикации на @${j.account.handle} (${j.localTime})`, `/publications?job=${j.id}`);
       continue;

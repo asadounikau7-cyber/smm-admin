@@ -13,11 +13,27 @@ export type Recovered = { reconcile: number; mainLine: number; retests: number; 
 export const recoverableWhere: Prisma.PublicationJobWhereInput = {
   OR: [
     { status: "FAILED", errorCode: { in: OUR_SIDE } },
-    { status: "ACTION_REQUIRED", errorCode: "AUTH" },
+    { status: "ACTION_REQUIRED", errorCode: { in: ["AUTH", "OVERDUE"] } },
     // YouTube's daily upload cap (counted as INVALID before 2026-11-25).
     { status: "FAILED", errorMessage: { contains: "exceeded the number of videos" } },
   ],
 };
+
+/** A test that couldn't go out: its unfinished uploads are dropped and the series goes back to the front of the test queue. */
+export async function restartTest(seriesId: string, since: Date, note: string) {
+  const series = await db.series.findUnique({ where: { id: seriesId } });
+  // What is already on the test channel stays.
+  await db.publicationJob.updateMany({
+    where: { status: { in: ["FAILED", "QUEUED", "ACTION_REQUIRED"] }, externalId: null, AND: [{ meta: { path: ["seriesId"], equals: seriesId } }, { meta: { path: ["purpose"], equals: "test" } }] },
+    data: { status: "CANCELLED", nextAttemptAt: null },
+  });
+  if (series && ["TESTING", "NEW"].includes(series.stage) && !series.bannedAt)
+    await db.series.update({
+      where: { id: seriesId },
+      // An early date puts it at the front of the test queue.
+      data: { stage: "NEW", testJobId: null, testLiveAt: null, testCheckedAt: null, testQueuedAt: since, testNote: note },
+    });
+}
 
 /**
  * After an outage (2026-11-24: a broken Google key failed every YouTube call for 15 hours) the failed jobs
@@ -64,18 +80,7 @@ export async function recoverFailedJobs(now = new Date()): Promise<Recovered> {
     }
   }
   for (const [seriesId, since] of retests) {
-    const series = await db.series.findUnique({ where: { id: seriesId } });
-    // Unfinished test uploads of this series are dropped; what is already on the test channel stays.
-    await db.publicationJob.updateMany({
-      where: { status: { in: ["FAILED", "QUEUED", "ACTION_REQUIRED"] }, externalId: null, AND: [{ meta: { path: ["seriesId"], equals: seriesId } }, { meta: { path: ["purpose"], equals: "test" } }] },
-      data: { status: "CANCELLED", nextAttemptAt: null },
-    });
-    if (series && ["TESTING", "NEW"].includes(series.stage) && !series.bannedAt)
-      await db.series.update({
-        where: { id: seriesId },
-        // An early date puts it at the front of the test queue.
-        data: { stage: "NEW", testJobId: null, testLiveAt: null, testCheckedAt: null, testQueuedAt: since, testNote: "Тест перезапущен после сбоя ключа Google" },
-      });
+    await restartTest(seriesId, since, "Тест перезапущен после сбоя");
     out.retests++;
   }
   const active = await db.socialAccount.findMany({ where: { status: "ACTIVE" }, select: { id: true } });
