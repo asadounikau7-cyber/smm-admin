@@ -12,3 +12,22 @@ describe("child safety", () => {
       expect(childRisk({ title: t }), t).toBeNull();
   });
 });
+
+describe("child safety in the database", () => {
+  it("takes a child series off and keeps the rest as film candidates", async () => {
+    const { db } = await import("./db");
+    const { dropChildSeries } = await import("./childSafety");
+    const { filmCandidates } = await import("./films");
+    const slugs = ["cs-kid", "cs-adult"];
+    await db.series.deleteMany({ where: { slug: { in: slugs } } });
+    const kid = await db.series.create({ data: { slug: "cs-kid", title: "Don't Touch My Son", stage: "IN_WORK" } });
+    const adult = await db.series.create({ data: { slug: "cs-adult", title: "Every Tycoon Wants Her", stage: "IN_WORK" } });
+    const out = await dropChildSeries();
+    expect(out.some((t) => t.includes("Don't Touch My Son"))).toBe(true);
+    const ids = (await db.series.findMany({ where: { ...filmCandidates, slug: { in: slugs } }, select: { id: true } })).map((x) => x.id);
+    expect(ids).toEqual([adult.id]);
+    expect((await db.series.findUniqueOrThrow({ where: { id: kid.id } })).mainSkip).toContain("Дети в сюжете");
+    await db.series.deleteMany({ where: { slug: { in: slugs } } });
+    await db.$disconnect();
+  });
+});

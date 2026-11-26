@@ -84,8 +84,11 @@ export const filmCandidates: Prisma.SeriesWhereInput = {
   stage: "IN_WORK",
   bannedAt: null,
   compilation: null,
-  OR: [{ contentLang: null }, { contentLang: "en" }],
-  NOT: { mainSkip: { startsWith: CHILD_SKIP } },
+  AND: [
+    { OR: [{ contentLang: null }, { contentLang: "en" }] },
+    // NOT alone would drop rows with no mainSkip (NULL in SQL).
+    { OR: [{ mainSkip: null }, { NOT: { mainSkip: { startsWith: CHILD_SKIP } } }] },
+  ],
 };
 
 /** Series that get a film: every one that passed its test, English, long-episode ones (no Shorts for them) first. */

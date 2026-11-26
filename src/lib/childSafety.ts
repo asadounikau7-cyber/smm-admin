@@ -23,7 +23,8 @@ export const isChildSkip = (mainSkip: string | null | undefined) => Boolean(main
  */
 export async function dropChildSeries(now = new Date()) {
   const series = await db.series.findMany({
-    where: { stage: "IN_WORK", NOT: { mainSkip: { startsWith: CHILD_SKIP } } },
+    // NOT alone would drop rows with no mainSkip (NULL in SQL), hence the OR.
+    where: { stage: "IN_WORK", OR: [{ mainSkip: null }, { NOT: { mainSkip: { startsWith: CHILD_SKIP } } }] },
     select: { id: true, title: true, synopsis: true, hookTitle: true },
   });
   const out: string[] = [];
