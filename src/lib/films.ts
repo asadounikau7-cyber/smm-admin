@@ -13,6 +13,7 @@ import { RENDERS_DIR, renderPath } from "./renderStore";
 import { ytLongUploads, ytVideoHealth } from "./adapters/youtube";
 import { GEOS, getConveyorSettings, isGeo } from "./conveyor";
 import { notify } from "./notify";
+import { CHILD_SKIP } from "./childSafety";
 import { audit } from "./audit";
 
 /**
@@ -84,6 +85,7 @@ export const filmCandidates: Prisma.SeriesWhereInput = {
   bannedAt: null,
   compilation: null,
   OR: [{ contentLang: null }, { contentLang: "en" }],
+  NOT: { mainSkip: { startsWith: CHILD_SKIP } },
 };
 
 /** Series that get a film: every one that passed its test, English, long-episode ones (no Shorts for them) first. */

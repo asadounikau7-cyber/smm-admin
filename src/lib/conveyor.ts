@@ -1,3 +1,4 @@
+import { dropChildSeries } from "./childSafety";
 import { createHash } from "node:crypto";
 import { DateTime } from "luxon";
 import type { Episode, Platform, SocialAccount } from "@prisma/client";
@@ -525,6 +526,7 @@ export async function scheduleMain(now = new Date()) {
   for (const t of await dropMainDuplicates()) console.log(`[conveyor] duplicate dropped: ${t}`);
   for (const t of await dropLongMain()) console.log(`[conveyor] not a Short, dropped: ${t}`);
   for (const t of await dropForeignMain(now)) console.log(`[conveyor] not English, dropped: ${t}`);
+  for (const t of await dropChildSeries(now)) console.log(`[conveyor] children in the story, off YouTube: ${t}`);
   await rebalanceMain();
   const pv = s.channelVersions ? await prepareChannelVersions() : { made: 0, attached: 0 };
   if (pv.made || pv.attached) console.log(`[conveyor] channel versions: ${pv.made} new, ${pv.attached} attached`);
